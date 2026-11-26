@@ -16,7 +16,7 @@ Workflow for an AI agent — [`AGENTS.md`](../AGENTS.md). Russian version — [`
 ```
 blueprint3d/       repository root
   README.md        overview (README.ru.md — in Russian); AGENTS.md — workflow for an AI agent
-  docs/            this manual (manual.ru.md, manual.en.md)
+  docs/            documentation: this manual, architecture, modules, cli, file-formats, development (.en.md / .ru.md); map — docs/README.md
   requirements.txt dependencies (build123d on OpenCascade)
   scripts/         installation: install.ps1 (Windows), install.sh (Linux, macOS), install_mpfb.ps1
   venv/            environment, not in git; installed by scripts/install.ps1
@@ -352,7 +352,9 @@ Whatever is missing is added to `bp3d/` with comments, without breaking existing
 & $py -m bp3d selftest --draw
 ```
 
-All examples must pass; afterwards look at the example sheets (`examples/<name>/out/drawing/`). A new rule or limitation goes into this file right away, a new technique into an example or the template.
+All examples must pass; afterwards look at the example sheets (`examples/<name>/out/drawing/`). A new rule or limitation goes into this file right away (both languages), a new technique into an example or the template.
+
+**Documentation is mandatory for every change of the tool**: a `CHANGELOG.md` entry and every affected document in both languages, in the same pull request. How the tool is built — [architecture](architecture.en.md), [modules](modules.en.md), [CLI](cli.en.md), [file formats](file-formats.en.md); rules for changes, testing and documentation — [development guide](development.en.md).
 
 ## What to keep in git
 

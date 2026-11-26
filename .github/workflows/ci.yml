@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -15,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -33,3 +34,37 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m bp3d selftest --only starter pickup_front sedan_front quad_parts
+
+  docs:
+    # Documentation is mandatory (docs/development.en.md, "Documentation policy"):
+    # a pull request that changes the tool must also change CHANGELOG.md and the docs.
+    # The label "docs-not-needed" waives the docs part (not the changelog) for changes with
+    # no visible effect; the maintainer decides whether the label is justified.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Code changes come with documentation
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          changed=$(git diff --name-only "$BASE"...HEAD)
+          echo "Changed files:"; echo "$changed" | sed 's/^/  /'
+          code=$(echo "$changed" | grep -E '^(bp3d/|scripts/|examples/|bodies/|requirements\.txt$)' | grep -vE '(^bodies/README\.md$|/LICENSE$)' || true)
+          if [ -z "$code" ]; then echo "No tool code changed - nothing to check."; exit 0; fi
+          fail=0
+          if ! echo "$changed" | grep -qx 'CHANGELOG.md'; then
+            echo "::error::Tool code changed but CHANGELOG.md did not. Add an entry under 'Unreleased'."; fail=1
+          fi
+          docs=$(echo "$changed" | grep -E '^(docs/|README(\.ru)?\.md$|AGENTS\.md$|CONTRIBUTING\.md$|bodies/README\.md$)' || true)
+          if [ -z "$docs" ]; then
+            if echo "$LABELS" | grep -q '"docs-not-needed"'; then
+              echo "No docs changed; label docs-not-needed is set."
+            else
+              echo "::error::Tool code changed but no documentation did. Update docs/ (both languages) or ask the maintainer for the docs-not-needed label."; fail=1
+            fi
+          fi
+          exit $fail
