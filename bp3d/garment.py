@@ -345,6 +345,22 @@ class Outfit:
         if "front" in grids:
             grids["front"][:, 0] = ring[[cf(j) for j in range(ns, nf - ns + 1)]]
         grids["back"][:, -1] = ring[[cb(j) for j in range(ns, nf - ns + 1)]]
+        # Ткань у шеи: кромка выреза выравнивается вдоль себя, внутренние точки переда и спинки
+        # сглаживаются (выталкивание по ячейкам оставляло бугры, и стойка воротника садилась на неровный
+        # вырез), затем зазор до тела восстанавливается без сдвига общих рядов.
+        for key, row in (("front", -1), ("back", 0)):
+            if key not in grids or grids[key].shape[0] < 4:
+                continue
+            Gy = grids[key]
+            for _ in range(2):
+                H = Gy.copy()
+                Gy[1:-1, row] = (H[:-2, row] + 2 * H[1:-1, row] + H[2:, row]) / 4
+                H = Gy.copy()
+                Gy[1:-1, 1:-1] = 0.5 * H[1:-1, 1:-1] + 0.125 * (H[:-2, 1:-1] + H[2:, 1:-1] + H[1:-1, :-2] + H[1:-1, 2:])
+            cl = np.full(Gy.shape[:2], offv - 0.3)
+            cl[0], cl[-1] = -1e9, -1e9
+            cl[:, 0 if key == "front" else -1] = -1e9
+            grids[key] = B.push_out(Gy, cl, cells=False)
         # труба: при распашном переде середина переда вынимается
         if open_front:
             order = [(nu // 2 + hn + k) % nu for k in range(nu - 2 * hn + 1)]
@@ -622,13 +638,15 @@ class Outfit:
         p = self._outward(Patch(G, closed_v=closed, name=name))
         return Piece([p], t, dict(edge=p.G[-1] if p.G.shape[0] else None, outer=G[-1]), name=name)
 
-    def _stand(self, loop, closed, height, t, name, front_drop=0.35, rows=4, stand_off=4.5):
+    def _stand(self, loop, closed, height, t, name, front_drop=0.35, rows=4, stand_off=4.5, seat=True):
         """Воротник-стойка: ровное кольцо вокруг оси шеи. Низ лежит на вырезе, верх — гладкая плоская кромка;
         радиус идёт от выреза к шее с постоянным зазором, спереди стойка ниже (front_drop — доля высоты),
         чтобы не упираться в подбородок. Форма считается по кольцам шеи, а не выталкиванием точек из тела:
         выталкивание по точкам мяло стойку и вытягивало её вверх под подбородком."""
         B = self.B
-        L = smooth_line(loop, closed, step=10.0)
+        # seat: низ стойки — точно по кромке выреза (те же точки, что у лифа): ткань лифа входит в стойку
+        # без щели и нахлёста. Без seat кромка сглаживается и стойка садится поверх выреза.
+        L = np.asarray(loop, float) if seat else smooth_line(loop, closed, step=10.0)
         a0, b0 = B.joint("neck"), B.joint("head")
         ax = (b0 - a0) / np.linalg.norm(b0 - a0)
         ex = np.array([1.0, 0.0, 0.0]) - ax * ax[0]
@@ -669,14 +687,18 @@ class Outfit:
         rings = []
         for i in range(rows + 1):
             f = i / rows
-            h = (h0 - 4.0) + (top_h - h0 + 4.0) * f               # низ стойки перекрывает кромку выреза
+            if seat and i == 0:
+                rings.append(L.copy())
+                continue
+            drop, base = (0.0, r0) if seat else (4.0, r0 + 2.2)   # без seat низ стойки перекрывает кромку выреза
+            h = (h0 - drop) + (top_h - h0 + drop) * f
             need = r_body(th, h) + gapc
-            r = (r0 + 2.2) + (need - (r0 + 2.2)) * float(smoothstep(min(1.0, f / 0.6)))
-            r = sm(np.maximum(r, need), 1.5)
+            r = base + (need - base) * float(smoothstep(min(1.0, f / 0.6)))
+            r = sm(np.maximum(r, need), 1.0 if seat else 1.5)
             rings.append(a0 + ax[None] * h[:, None] + r[:, None] * (np.cos(th)[:, None] * ex + np.sin(th)[:, None] * ey))
         G = np.stack(rings, axis=0)
         cl = np.full(G.shape[:2], -1e9)
-        cl[:2] = LAYER_GAP[1] + t                                   # только низ: у основания шеи плечо поднимается круто
+        cl[1 if seat else 0:2] = LAYER_GAP[1] + t                   # только низ: у основания шеи плечо поднимается круто
         G = B.push_out(G, cl, cells=False)
         p = self._outward(Patch(G, closed_v=closed, name=name))
         return Piece([p], t, dict(outer=rings[-1]), name=name)
@@ -948,13 +970,14 @@ class Outfit:
 
     # ------------------------------------------------------------ обувь
     def shoe(self, side, shaft=0.9, layer=2, ease=3.0, t=2.0, sole=10.0, welt=3.0, toe=0.30, toe_height=32.0,
-             cols=24, name=None):
+             cols=24, name=None, rand=8.0):
         """Обувь — ботинок или сапог на КОЛОДКЕ: форма стопы у обуви своя, фиксированная, а не обтяжка стопы
         (обтяжка повторяла пальцы и свод). Голенище (от параметра ноги shaft: 0.9 — чуть выше щиколотки,
         0.7 — до середины голени) и изгиб у щиколотки идут по ноге; от подъёма до носка — колодка:
         гладкие сечения с плоским низом, ширина и высота — огибающая стопы плюс ease, носок закруглён на
-        последней доле длины toe, высота носка не меньше toe_height. Отдельным телом — подошва толщиной sole
-        с рантом welt (лоскут «<имя>_sole»: ему можно дать свой цвет узором kind="fill").
+        последней доле длины toe, высота носка не меньше toe_height. Отдельным телом — подошва-чаша толщиной
+        sole с рантом welt и бортиком высотой rand, который поднимается по стенке верха (лоскут «<имя>_sole»:
+        ему можно дать свой цвет узором kind="fill").
         Подошва уходит ниже пола на sole мм: в игре корень персонажа поднимается на эту величину.
         Верх открыт, толщина верха t. Привязка — по весам ноги: щиколотка гнётся."""
         from .body import plane_segments
@@ -987,7 +1010,8 @@ class Outfit:
         for ph in np.radians([22.5, 45, 67.5, 90]):                                            # изгиб: веер плоскостей
             rings.append(ring_at(pivot, np.array([-math.sin(ph), 0.0, -math.cos(ph)])))
         G = B.push_out(np.stack(rings, axis=1), off - 0.2)
-        G[..., 2] = np.where(G[..., 2] < 7.0, zb, G[..., 2])                                   # низ пятки — плоский
+        # низ пятки — плоский: кольца изгиба режут пятку наискось, и без этого она висит над подошвой клином
+        G[..., 2] = np.where(G[..., 2] < 16.0, zb, G[..., 2])
         nleg = G.shape[1]
         # --- колодка: огибающая стопы по станциям от подъёма до носка
         ss = spacing(9, [(1.0, 0.2, 1.6)])[1:]
@@ -1025,13 +1049,13 @@ class Outfit:
         G = np.concatenate([G, Gl, np.repeat(tip[None, None, :], cols, axis=0)], axis=1)   # полюс носка
         tube = self._outward(Patch(G, closed_u=True, name=name))
         upper = QuadMesh.from_patches([tube]).solidify(t)
-        # --- подошва: отдельное замкнутое тело под верхом, с рантом
+        # --- подошва: отдельное замкнутое тело-чаша. Низ верха утоплен в неё, а бортик высотой rand
+        # поднимается по стенке верха — подошва состыкована с верхом, а не приклеена снизу плоской плитой.
+        from .mesh import _find
         low = tube.G.reshape(-1, 3)
-        low = low[low[:, 2] < 10.0]
+        low = low[low[:, 2] < rand]                                   # контур верха на высоте бортика
         x0, x1 = float(low[:, 0].max()) + welt, float(low[:, 0].min()) - welt
-        sx = x0 + (x1 - x0) * spacing(15, [(0.0, 0.12, 1.8), (1.0, 0.12, 1.8)])
-        zc, hz = (zb + 1.0 - sole) / 2, (zb + 1.0 + sole) / 2
-        sx = sx[1:-1]
+        sx = (x0 + (x1 - x0) * spacing(15, [(0.0, 0.12, 1.8), (1.0, 0.12, 1.8)]))[1:-1]
         mid, half = np.full(len(sx), np.nan), np.full(len(sx), np.nan)
         for k, x in enumerate(sx):                                    # контур низа верха по станциям
             sl = low[np.abs(low[:, 0] - x) < 14.0]
@@ -1040,21 +1064,31 @@ class Outfit:
         ok = np.isfinite(half)                                        # станции без точек — по соседним
         mid, half = np.interp(sx[::-1], sx[ok][::-1], mid[ok][::-1])[::-1], np.interp(sx[::-1], sx[ok][::-1], half[ok][::-1])[::-1]
         half = np.convolve(np.pad(half, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")
+        nb, zf = 6, zb - 0.7                                          # zf — дно чаши, чуть ниже низа верха
         srings = []
         for k, x in enumerate(sx):
             e = min(abs(x - x0), abs(x - x1))                         # скругление пятки и носка подошвы в плане
-            hw = half[k] + welt
+            W = half[k] + welt
             if e < 34.0:
-                hw = min(hw, math.sqrt(max(e * (2 * 34.0 - e), 0.0)) + 6.0)
-            r = (np.abs(dy / max(hw, 6.0)) ** 6.0 + np.abs(dz / hz) ** 6.0) ** (-1.0 / 6.0)
-            # точки кольца — равномерно по длине контура: у плоского сечения равные углы дают узкие квады на бортах
-            srings.append(resample_closed(np.stack([np.full(cols, x), mid[k] + r * dy, zc + r * dz], axis=1), cols))
+                W = min(W, math.sqrt(max(e * (2 * 34.0 - e), 0.0)) + 6.0)
+            W = max(W, 7.0)
+            zt = zf + 0.8 + rand * float(smoothstep(min(1.0, e / 30.0)))    # бортик сходит на нет к концам
+            Wi = W - min(welt + 1.0, W * 0.45)                        # внутренний край бортика — в толще стенки верха
+            pts = ([(y, -sole) for y in np.linspace(-W, W, nb + 1)] + [(W, (zt - sole) / 2), (W, zt)]
+                   + [(y, zf) for y in np.linspace(Wi, -Wi, nb + 1)] + [(-W, zt), (-W, (zt - sole) / 2)])
+            srings.append(np.array([(x, mid[k] + y, z) for y, z in pts]))
+        ns_ = len(srings[0])
         c0, c1 = srings[0].mean(axis=0), srings[-1].mean(axis=0)
         c0[0], c1[0] = x0, x1
-        Gs = np.stack([np.repeat(c0[None], cols, axis=0)] + srings + [np.repeat(c1[None], cols, axis=0)], axis=1)
+        Gs = np.stack([np.repeat(c0[None], ns_, axis=0)] + srings + [np.repeat(c1[None], ns_, axis=0)], axis=1)
         sm_ = QuadMesh.from_patches([Patch(Gs, closed_u=True, name=name + "_sole")])
         _orient_like_first(sm_)
         _fix_outward(sm_)
+        edges = []                                                    # острые рёбра: низ, верх бортика, его внутренний край
+        for c in (0, nb, nb + 2, nb + 3, 2 * nb + 3, 2 * nb + 4):
+            v = _find(sm_, Gs[c, 1:-1])
+            edges.append(np.stack([v[:-1], v[1:]], axis=1))
+        sm_.sharp = np.unique(np.sort(np.vstack(edges), axis=1), axis=0)
         pc = Piece(solid=upper.merged(sm_), edges=dict(top=tube.G[:, 0]), name=name)
         pc.layer, pc.limb = layer, limb
         pc.ground = sole

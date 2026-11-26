@@ -217,6 +217,8 @@ A part is added as usual: `M.add("body", 1, "Housing", "Steel", quad_mesh, color
 
 ## Clothing
 
+> **Garments are at an early stage.** The clothing pipeline (body, garment blocks, weights, spring bones, `posetest`) has only just started: expect glitches — crumpled or uneven edges, parts that do not meet cleanly, poses where fabric goes through the body. This is normal for now and will be fixed step by step. If you find a problem, please [open an issue](https://github.com/prizmor/blueprint3d/issues) with the spec and a render, or fix it and send a pull request — see [CONTRIBUTING.md](../CONTRIBUTING.md). The hard-surface pipeline is more mature.
+
 The style is that of anime games: clothing is a modelled mesh with clean quad topology, not a cloth simulation. The model defines the shape (the skirt holds a bell, the collar stands up), motion comes from spring bones only where it is needed (hem, ribbons, tails), the clothing sits on the body, and the body underneath is hidden. There are no sewing patterns or stitching: a garment is described directly in 3D relative to the body. Example and template — `examples/garment_basic`.
 
 ### Body (`bp3d.body`)
@@ -246,7 +248,7 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 | `skirt(waist, length, kind)` | Skirt: `straight`, `a`, `bell`, `circle`; `pleats=n` — pleats as geometry; `top=bodice` — a dress as one part | `waist`, `hem` |
 | `pants(waist, length)` | Trousers, shorts, leggings: pelvis, crotch bridge, two legs | `waist`, `end_L/R` |
 | `stocking(side, top, bottom)`, `glove(side, ...)` | Stocking, knee sock, sock; arm sleeve | `top`, `end` |
-| `collar(top, kind)` | Collar along the neckline: `stand` — a stand built as an even ring around the neck axis (`height`, `front_drop` — how much lower it is at the front, as a fraction of the height), `turndown`, `flat`, `ruffle` | |
+| `collar(top, kind)` | Collar along the neckline: `stand` — a stand built as an even ring around the neck axis (`height`, `front_drop` — how much lower it is at the front, as a fraction of the height); its bottom runs exactly along the bodice neckline edge, `turndown`, `flat`, `ruffle` | |
 | `cuff(piece, kind)`, `hem_band(piece, kind)` | Cuff and hem band: `band`, `turnback`, `ruffle` | |
 | `band(loop, profile)` | Any strip along an edge: custom profile, wave (frill, ruche) | |
 | `piping(loop)` | Piping — a cord along an edge | |
@@ -255,7 +257,7 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 | `buttons(z_top, z_bottom, count)`, `lacing(...)` | Row of buttons and lacing on the front or back | |
 | `ribbon(path, width, over=[...])` | Ribbon along a polyline; `over` — garments it lies on | `end` |
 | `bow(center)` | Bow: loops with a knot and two tails as separate blocks (tails get dynamics) | |
-| `shoe(side, shaft)` | Boot built on a last: the shaft and the ankle bend follow the leg, from the instep to the toe the shoe has its own smooth shape (envelope of the foot plus `ease`, toe rounded over the `toe` fraction of the length, toe box at least `toe_height` high); a sole `sole` thick with a `welt` is a separate patch `<name>_sole` | `top` |
+| `shoe(side, shaft)` | Boot built on a last: the shaft and the ankle bend follow the leg, from the instep to the toe the shoe has its own smooth shape (envelope of the foot plus `ease`, toe rounded over the `toe` fraction of the length, toe box at least `toe_height` high); a cup sole `sole` thick with a `welt` and a `rand` wall rising along the side of the upper is a separate patch `<name>_sole` | `top` |
 
 - **Layers.** `layer` 1 — next to the body (tight-fitting, stockings), 2 — tops and skirts, 3 — outerwear, 4 — accessories. The offset of the inner side from the body grows with the layer: 2, 6, 10, 14 mm (`garment.LAYER_GAP`), so the layers do not intersect. `ease` — extra looseness on top of the offset: a number, a function of height or `{"waist": 2, "bust": 6}`. `tent` 0…1 — fabric tension across hollows (cleavage, between the legs).
 - **Grid density.** `cols` — loops around the torso (a multiple of 8), `row_step` — row spacing, mm (default 20). At the waist, elbow and knee the rows are densified automatically; `check` requires at least 3 loops across a bend.
@@ -288,6 +290,8 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 - **An overlay part lies on the clothing, not on the body.** A ribbon at the collar, computed from the body, ended up 12 mm under the T-shirt: at the cleavage the fabric is stretched (`tent`). Pass `over=[garment]`.
 - **Short skirt and the "sit" pose.** The thigh rises by 90°, and the hem must lie on it: `follow`, more chains and `radius` 30 help. The chain between the thighs touches no collider; in the estimate the neighbouring chains pull it along (`posetest.LATERAL`), otherwise the front sags as a wedge through the legs. In the engine this needs a link between neighbouring chains (the `ring` field in `<name>_dynamics.json`) — look at the `pose_sit` frame.
 - **Do not shrink-wrap a stand collar point by point.** Pushing every point of the stand out of the body crumpled it, made the top edge uneven and stretched it upwards under the chin. The stand is built from rings around the neck axis: constant clearance, flat top edge, lower at the front.
+- **The sole meets the upper with a wall.** A flat slab under the upper looked glued on from below. The sole is a cup: the bottom of the upper sinks into it and the `rand` wall rises along the side.
+- **The stand starts at the neckline edge.** A stand laid over the neckline with its own smoothed edge left a gap and an overlap with the bodice fabric; the bodice evens out the neckline edge and the fabric near the neck itself, and the stand takes the same points.
 - **Footwear has its own shape, not a wrap of the foot.** A shell around the foot repeated the toes and the arch. From the instep to the toe the shoe is built on a last; the body inside may be anything.
 - **Place a rigid overlay along the tilt of the part under it.** A buckle standing vertically looked foreign on a tilted belt: take the normal and "up" from the belt.
 - **Hem colliders are the legs and the pelvis.** In a forward bend the torso capsule comes from above and pushed the hem upwards, into the vest.

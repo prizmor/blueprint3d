@@ -12,6 +12,8 @@
 
 Works for hard-surface objects (vehicles, weapons, gear, furniture, buildings) and for character clothing in an anime-game style (modelled garments, not cloth simulation).
 
+> **Garments are at an early stage.** The clothing pipeline (body, garment blocks, weights, spring bones, `posetest`) has only just started: expect glitches — crumpled or uneven edges, parts that do not meet cleanly, poses where fabric goes through the body. This is normal for now and will be fixed step by step. If you find a problem, please [open an issue](https://github.com/prizmor/blueprint3d/issues) with the spec and a render, or fix it and send a pull request — see [CONTRIBUTING.md](CONTRIBUTING.md). The hard-surface pipeline is more mature.
+
 ## Requirements
 
 - Git with [Git LFS](https://git-lfs.com/) — the rigged bodies in `bodies/` are LFS files

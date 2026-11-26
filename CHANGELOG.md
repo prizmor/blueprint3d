@@ -18,6 +18,8 @@ Every pull request that changes the tool adds a line under **Unreleased** (CI ch
 - **[hash]** Garments: skirt dynamics defaults use only leg and pelvis colliders.
 - Pose test: chains of one dynamics zone are linked laterally (`posetest.LATERAL`), so a hem no longer sags as a wedge between the thighs; `<name>_dynamics.json` chains carry `ring`.
 - Atlas: pattern kind `fill` (whole island in one colour).
+- **[hash]** Garments: the shoe sole is a cup with a `rand` wall that rises along the upper; the stand collar starts exactly at the neckline edge; `bodice()` evens out the neckline edge and smooths the fabric near the neck.
+- Docs: the garment pipeline is marked as early-stage in the README, the manual and `AGENTS.md`, with a request to report problems or send fixes.
 - CI: `actions/checkout` and `actions/setup-python` v7 (Node 24).
 
 ## [0.4.0] - 2026-11-26
