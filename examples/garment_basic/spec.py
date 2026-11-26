@@ -32,7 +32,9 @@ def build_model():
 
     # Слой 2 — шорты: труба таза, шаговый мостик и две штанины; низ футболки заправлен под них
     shorts = O.pants(waist=("waist", -5), length=0.26, layer=2, ease=2.0, leg_ease=7.0)
-    O.add("shorts", 2, "Шорты", "Хлопок плотный", shorts, finish="cloth", color="navy", layer=2, hides=True)
+    # bind: облегающая вещь — веса с тела; smooth_mm — сглаживание весов по ткани (пах не рвётся на шаге)
+    O.add("shorts", 2, "Шорты", "Хлопок плотный", shorts, finish="cloth", color="navy", layer=2, hides=True,
+          bind=dict(mode="tight", smooth_mm=12))
 
     # Слой 3 — пояс поверх шорт (over: пояс ложится на вещь под ним) и пряжка на одной кости
     belt = O.belt(z=("waist", -22), width=26, thick=3, layer=3, over=[shorts])

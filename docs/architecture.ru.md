@@ -23,6 +23,7 @@ flowchart LR
     model["model.py<br/>Model · Part"]
     kit["kit.py<br/>контуры, тела, B-сплайн-поверхности"]
     mesh["mesh.py<br/>QuadMesh, лоскуты, UV-острова"]
+    folds["folds.py<br/>складки, рельеф, запекание карт"]
     drawing["drawing.py<br/>проекция, HLR, лист"]
     build["build.py<br/>экспорт в Blender"]
     body["body.py<br/>тело с ригом, ориентиры"]
@@ -44,7 +45,8 @@ flowchart LR
   cli --> drawing --> out
   cli --> build --> blb & blg --> out
   cli --> posetest
-  garment --> body & rig
+  garment --> body & rig & folds
+  build --> folds
   body --> blbody
   cli --> blr & blp --> out
   cli --> appr
@@ -54,7 +56,7 @@ flowchart LR
 |---|---|---|
 | Командная строка | `__main__.py` | Команды, загрузка спецификации, хеш апрува и его проверка, конфигурация проекта, печать через браузер, selftest |
 | Модель данных | `model.py` | `Model`, `Part`, отделки, палитра, перечень позиций (BOM) |
-| Геометрия | `kit.py`, `mesh.py` | Построение B-rep (контуры, призмы, лофты, B-сплайн-лоскуты, оболочки) и квадовые меши из тех же сеток |
+| Геометрия | `kit.py`, `mesh.py`, `folds.py` | Построение B-rep (контуры, призмы, лофты, B-сплайн-лоскуты, оболочки) и квадовые меши из тех же сеток |
 | Чертёж | `drawing.py` | Проекция, удаление скрытых линий, разрезы, выносные виды, размеры, таблицы, штамп, SVG |
 | Персонажи | `body.py`, `garment.py`, `rig.py`, `posetest.py`, `mannequin.py` | Тело с ригом как данные, блоки одежды, привязка и кости с пружиной, тест поз, манекен, собранный кодом |
 | 3D-экспорт | `build.py` | Поиск Blender, запись манифестов/glTF/npz, запуск скриптов Blender |

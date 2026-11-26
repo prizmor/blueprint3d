@@ -195,6 +195,25 @@ A part is added as usual: `M.add("body", 1, "Housing", "Steel", quad_mesh, color
 
 `check` thresholds: quad aspect ratio no more than 8:1 (border edge quads are not counted: they are elongated by construction); deviation from the B-rep over 1.5 mm — a warning "add rows". Triangles are allowed only at revolve poles and toes — their count is shown in `check` and in the report.
 
+### Folds and fine relief (`bp3d.folds`)
+General functionality for any quad mesh (clothing, soft goods). A fold is part of the model: it does not change in animation, the item only bends with the bones.
+
+A fold (`Fold`) is a curve on the surface — `path` (points, mm; pressed onto the surface when the part is assembled) or `uv=[(u, v), ...]` on a named `patch` — plus a cross-section profile: `ridge` (rounded crest), `valley` (rounded trough), `pipe` (wide crest), `crease` (sharp crest), `groove` (sharp groove, seam), `step` (step — folded-over fabric), `stitch` (dashed groove with `pitch`). Parameters: `amp` (mm, positive outward; a number, `(start, end)` or per point of the curve), `width` (half-width of the profile, mm), `taper` (fade towards the ends, a fraction of the length), `asym` (−1…1), `offset` (mm across the curve — parallel stitch rows from one seam), `closed`.
+
+`mode` says where the fold goes; several at once are allowed, and different folds of one item may use different modes:
+
+| Mode | Where | Typical use |
+|---|---|---|
+| `geo` | Geometry of the game model; rows near the fold are densified automatically (`refine_for_folds`) | Large folds: accordion at the ankle, knee bags, tension diagonals, hanging pipes |
+| `normal` | Tangent-space normal map (`<name>_normal.png`, OpenGL Y+), baked by the UV layout | Small folds, gathers, seams, stitches, rib of an elastic |
+| `mask` | Fold mask for the artist (`<name>_foldmask.png`, brightness — fold strength) | Data for painting or shading folds |
+
+Folds are passed to `Outfit.add(..., folds=[...])`; a block may carry its own (`Piece.folds`: rib of a waistband). The normal map is baked analytically from the fold field at the surface point under each pixel — equivalent to baking from a high-poly version of the same item; the high-poly mesh itself is not exported. Atlas resolution — `Model.atlas_px` (default 2048; 4096 for stitches and ribs).
+
+- Densification adds rows only across a fold (a ring fold needs denser rows, not columns along itself), at most `REFINE_MAX` = 4 between two old rows, and does not make a quad narrower than 1:`REFINE_ASPECT` = 5. A direction whose edges are welded to another patch is not densified (a note is printed: raise `cols` / lower `row_step` of the block).
+- Points moved by `geo` folds are pushed out of the body to the layer gap.
+- On a ready solid (`Piece.solid`: shoe, laces) only `normal` and `mask` work.
+
 ### Rules learned in practice
 - **Grid orientation.** The patch normal is `du × dv`. `skin` grows thickness towards "minus normal". An "inward" layer on a grid with an outward normal will go outward: flip the grid (`G[:, ::-1]`) and check the overall dimensions in `check` — they must not grow.
 - **Mirrored parts** — `mirror_y` of the finished left part, not building a second grid with reversed winding.
@@ -246,7 +265,7 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 | `bodice(bottom, neck, ...)` | Bodice, top, shirt, blouse, jacket, vest: a tube up to the armpits and an upper part with shoulders. `neck`: `round`, `v`, `square`, `boat`, `high`; `open_front=True` — open front | `bottom`, `neck`, `armhole_L/R` |
 | `sleeve(top, side, length, kind)` | Sleeve from the armhole: `straight`, `flare`, `bell`, `puff` (puff sleeve), `cap` (cap sleeve); sleeveless — do not add the block | `end` |
 | `skirt(waist, length, kind)` | Skirt: `straight`, `a`, `bell`, `circle`; `pleats=n` — pleats as geometry; `top=bodice` — a dress as one part | `waist`, `hem` |
-| `pants(waist, length)` | Trousers, shorts, leggings: pelvis, crotch bridge, two legs | `waist`, `end_L/R` |
+| `pants(waist, length)` | Trousers, shorts, leggings: pelvis, crotch bridge, two legs. Loose cut: `ease` by landmarks (`{"waist": 0.5, "hips": 10}` — elastic at the waist, loose on the hips), `leg_ease` by zones `top`, `thigh`, `knee`, `calf`, `ankle`, `leg_around` by sides `front`, `back`, `out`, `in`, `leg_tent`, `leg_smooth`, `crease` (cap of the gap behind the knee and at the front of the groin, default 12 mm), `elastic=True` | `waist`, `end_L/R` |
 | `stocking(side, top, bottom)`, `glove(side, ...)` | Stocking, knee sock, sock; arm sleeve | `top`, `end` |
 | `collar(top, kind)` | Collar along the neckline: `stand` — a stand built as an even ring around the neck axis (`height`, `front_drop` — how much lower it is at the front, as a fraction of the height); its bottom runs exactly along the bodice neckline edge, `turndown`, `flat`, `ruffle` | |
 | `cuff(piece, kind)`, `hem_band(piece, kind)` | Cuff and hem band: `band`, `turnback`, `ruffle` | |
@@ -258,10 +277,20 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 | `ribbon(path, width, over=[...])` | Ribbon along a polyline; `over` — garments it lies on | `end` |
 | `bow(center)` | Bow: loops with a knot and two tails as separate blocks (tails get dynamics) | |
 | `shoe(side, shaft)` | Boot built on a last: the shaft and the ankle bend follow the leg, from the instep to the toe the shoe has its own smooth shape (envelope of the foot plus `ease`, toe rounded over the `toe` fraction of the length, toe box at least `toe_height` high); a cup sole `sole` thick with a `welt` and a `rand` wall rising along the side of the upper is a separate patch `<name>_sole` | `top` |
+| `binding(piece, edge, width)` | Binding that wraps an edge on both sides (neckline, armhole); the direction across the edge is taken from the garment surface | |
+| `waistband(piece, width)` | Elastic waistband over the top edge of trousers or a skirt; lies over the garment, rib of the elastic in the normal map | |
+| `sneaker_details(shoe, tongue_w, eyelets)` | Sneaker details on a `shoe`: padded collar, tongue along the instep, lacing with eyelets; returns (blocks of the shoe material, laces block) | |
+| `auto_folds(piece, amount, seams)` | Plausible folds by block type and fit (`pants`, `sleeve`, `skirt`): accordion at knee and ankle, tension from the crotch, hanging pipes, gathers under an elastic, side seam and inseam | |
+| `folds_accordion`, `folds_tension`, `folds_hanging`, `folds_spiral`, `folds_gather`, `fold_crease`, `folds_pressed`, `folds_quilt`, `seam` | Fold types as ready functions (compression accordion, tension, hanging, spiral, gathers, folded fabric, pressed pleats, quilting, seam with stitches); `limb_arc`, `limb_line` — rings and lines along a limb for your own folds | |
 
 - **Layers.** `layer` 1 — next to the body (tight-fitting, stockings), 2 — tops and skirts, 3 — outerwear, 4 — accessories. The offset of the inner side from the body grows with the layer: 2, 6, 10, 14 mm (`garment.LAYER_GAP`), so the layers do not intersect. `ease` — extra looseness on top of the offset: a number, a function of height or `{"waist": 2, "bust": 6}`. `tent` 0…1 — fabric tension across hollows (cleavage, between the legs).
 - **Grid density.** `cols` — loops around the torso (a multiple of 8), `row_step` — row spacing, mm (default 20). At the waist, elbow and knee the rows are densified automatically; `check` requires at least 3 loops across a bend.
-- **Binding.** `bind="auto"` — weights are transferred from the nearest body surface with interpolation inside the triangle, smoothed, and limited to 4 influences per vertex. A vertex on the left does not take weights from the right arm and leg. A rigid part — `bind="hips"` (a role or bone name).
+- **Binding.** Strategies (`bind`):
+  - `"auto"` / `"tight"` — fitted: weights from the nearest body surface with interpolation inside the triangle;
+  - `"proxy"` / `"loose"` — loose: where the fabric stands off the body, weights come from a proxy body (`Body.proxy`: the body inflated by 25 mm and smoothed, with weights smoothed over the mesh 12 times); where it is close to the body (elastic, waistband), from the skin. The blend goes by the gap: closer than `rig.PROXY_FROM` = (10, 22) mm — skin, farther — proxy, smoothly between;
+  - a bone name or role — a rigid part on one bone.
+
+  After the transfer the weights are smoothed over the fabric by distance (`smooth_mm`, implicit diffusion with edge weight 1/length²): `rig.SMOOTH_MM_TIGHT` = 20 mm for fitted, `SMOOTH_MM_LOOSE` = 45 mm for loose; for loose items weights smaller than `WEIGHT_MIN_LOOSE` = 0.03 are dropped softly. 4 influences per vertex remain. A vertex on the left does not take weights from the right arm and leg. Your own values: `bind=dict(mode="loose", smooth_mm=30, inflate=25, proxy_smooth=12, proxy_from=(10, 22), w_min=0.03)`. A rigid part — `bind="hips"` (role or bone name).
 - **Dynamics.** `dynamics="stiff" | "soft"` or a dictionary: `preset`, `patch` (patch name), `chains` (chains around; 1 for a ribbon), `bones` (bones per chain), `v0`…`v1` — the section of the grid, top to bottom, where dynamics work, `blend` — width of the transition from body weights, `parent` — the root bone, `radius` — collision radius, `follow` — the fraction of thigh rotation that the chain root follows, `colliders`. A skirt fills in defaults itself: root on the pelvis, start at the hip line, 12 chains of 4 bones, `follow=0.9`, colliders limited to the legs and the pelvis. Body capsule colliders (thighs, shins, upper arms, forearms, pelvis, torso, head) are built automatically.
 - **Hiding the body.** `hides=True`: a body vertex closer than 14 mm to the inner side of the garment and farther than 18 mm from its edges counts as covered; a body polygon is hidden if all its vertices are covered. Tuning — `hides=dict(reach=…, margin=…)`.
 
@@ -277,6 +306,8 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
   - `тело` (body) — a clothing vertex has gone under the skin of its body part (hidden polygons are not counted);
   - `слой` (layer) — a vertex of an upper layer has gone under the outer surface of a lower layer on the same body part;
   - `коллайдер` (collider) — how far a collider pushed a chain joint (for reference: a large value means the hem lies on the thigh).
+  - `растяжение` / `сжатие` (stretch / compression) — how much more an edge of the outer layer is stretched or compressed than the skin under it (linear skinning itself stretches the mannequin's skin at the armpit severalfold in `arms_up`; a fitted item cannot stretch less). Thresholds: `posetest.STRETCH_MAX` = 60 %, `COMPRESS_MAX` = 70 %, in extreme poses `STRETCH_EXTREME` = 90 %; by zone (`STRETCH_ZONES`, nearest landmark): crotch 110 %, armpit 90 %, elbow and knee 75 %. All thresholds are proposals;
+  - `кожа в теле` (skin in body) — the garment entered skin that itself went into another body part in the pose (calf into thigh in a squat, belly into thigh when sitting: linear skinning crushes the inner side of a strong bend). Reported separately and not counted as a failure: this is the limit of the pose, not of the item (`posetest.skin_self`).
   Chains of one dynamics zone are linked like a sheet: a joint is pulled towards the displacement of the neighbouring chains by the fraction `posetest.LATERAL` (0.75) when the neighbours are displaced more — the hem does not sag as a wedge between the thighs.
   The table "pose → part → kind → depth → location (nearest landmark)" is printed and written to `out/posetest/report.json`; next to it are a frame of each pose and close-ups of the four worst spots.
 - **Thresholds** (`posetest.PEN_BODY`, `PEN_LAYER`, `PEN_EXTREME`): 4 mm for the body and layers; 12 mm in the extreme poses `sit`, `squat`, `elbows_bent` — there the joint is bent by more than 90°, with linear skinning the body enters itself in the fold, and the clothing in the fold repeats this. Anything deeper than the threshold must be fixed: offset (`ease`), layer, length, binding, dynamics.
@@ -297,6 +328,14 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 - **Hem colliders are the legs and the pelvis.** In a forward bend the torso capsule comes from above and pushed the hem upwards, into the vest.
 - **Check clearance between vertices too.** A flat quad cuts off the convexity of the body: `push_out` also moves the corners of a cell whose middle is closer than half the offset.
 - **Body hiding does not reach the edge.** A strip of the body at the edge of the garment stays visible (`margin`): otherwise a hole shows in the neckline and under the hem.
+- **Smooth weights by distance, not by neighbours.** On a sleeve at the armpit the weight jump sat on a few 6 mm edges, and in `arms_up` they stretched by 280 % over the skin; smoothing over 20 mm of fabric brought it to 55 %.
+- **A tail of a far bone is worse than no weight.** 3.7 % of the thigh on a belly vertex moved it by 9 mm when sitting (the thigh turns by 90°), and the neighbour had another bone as its fourth influence. Loose items drop small influences softly (`WEIGHT_MIN_LOOSE`); a hard cut makes the jump at the cut boundary.
+- **The proxy body only where the fabric hangs free.** Proxy weights at the elastic waist dragged the thigh into the belly and stretched it by 289 %; they are blended in by the gap to the body.
+- **Loose fabric on the inner side of a bend falls into the body.** Behind the knee in a squat and at the front of the groin when sitting, linear skinning crushes the bend; the gap there is limited (`pants(crease=...)`).
+- **A narrow strip needs a dense edge.** A binding on a sparse neckline edge made 1:15 quads; the edge is resampled to the step across the strip, linearly — a cubic spline overshoots at the strap corners.
+- **Across the edge — along the garment surface.** The mean plane of an armhole led a binding into the body under the arm: an armhole is a 3D curve.
+- **A waistband lies over the trousers.** Below the edge the trousers widen towards the hips, and a straight band sank into them; gathers start below the band.
+- **Tension (`tent`) starts below the limb root.** At the crotch the hull of the ring included the pelvis and inflated the leg to 45 mm.
 
 ## Sheet
 
@@ -313,6 +352,7 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 | `gaps`, `tech` | Gap table, technical requirements |
 | `hlr="poly"` | Polygonal hidden-line computation: seconds instead of minutes on assemblies of hundreds of spline solids. The default is exact |
 | `views[].dynamics` | Clothing: spring bone chain lines and the dynamics zone boundary on the view |
+| `views[].folds` | Clothing: lines of `geo` folds on the view, only on the side facing the viewer (crest — dash-dot, trough and crease — short dash) |
 | `sections[].plane = ("free", point, normal[, up])` | Section by an arbitrary plane (a sleeve across the arm); `near` — only contours closer than that many mm to the point |
 | `measures_at`, `layers_at`, `dyn_at` | Clothing: tables of body measurements, layers and binding, dynamics |
 | `size`, `legend_at`, `tech_at`, `gaps_at` | Sheet size in mm (default A1 841×594; the template is A2 594×420) and the positions of the legend, technical requirements and gap table. On a sheet smaller than A1, `legend_at` must be set: the default position is designed for A1 |
@@ -378,4 +418,6 @@ All examples must pass; afterwards look at the example sheets (`examples/<name>/
 - Import into the engine is not automated; the spring bone component in the engine is on the project side.
 - Clothing: `posetest` is an estimate based on linear skinning and static equilibrium of the chains, not game physics. A short skirt in the "sit" and "squat" poses gives penetrations up to the extreme-pose threshold and above.
 - Clothing: the open front (`open_front`) has no lapels or overlapping fastening; a stocking ends at the ankle (the foot is covered by footwear); the boot has no heel, and its sole goes below the floor by its thickness (the character root is raised by it in the game); on the atlas the border edge quads share one small island.
+- Clothing: loose bottoms in deep bends — in `squat` the fabric behind the knee and when sitting at the waist and knee stretches above the threshold, and on a wide step the crotch reaches the proposed 110 % limit. Without corrective shapes (not made: a user decision) linear skinning does not do better; see `posetest`.
+- Clothing: folds — no deformers (bend, twist, inflate, brush) yet; a fold on a patch whose edges are welded densifies only the free direction.
 - Clothing: a CAD part is bound to a single bone only.

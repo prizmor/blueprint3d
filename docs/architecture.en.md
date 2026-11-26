@@ -23,6 +23,7 @@ flowchart LR
     model["model.py<br/>Model · Part"]
     kit["kit.py<br/>contours, solids, B-spline surfaces"]
     mesh["mesh.py<br/>QuadMesh, patches, UV islands"]
+    folds["folds.py<br/>folds, relief, map baking"]
     drawing["drawing.py<br/>projection, HLR, sheet"]
     build["build.py<br/>export to Blender"]
     body["body.py<br/>rigged body, landmarks"]
@@ -44,7 +45,8 @@ flowchart LR
   cli --> drawing --> out
   cli --> build --> blb & blg --> out
   cli --> posetest
-  garment --> body & rig
+  garment --> body & rig & folds
+  build --> folds
   body --> blbody
   cli --> blr & blp --> out
   cli --> appr
@@ -54,7 +56,7 @@ flowchart LR
 |---|---|---|
 | Command line | `__main__.py` | Commands, spec loading, approval hash and check, project config, browser printing, selftest |
 | Data model | `model.py` | `Model`, `Part`, finishes, palette, parts list (BOM) |
-| Geometry | `kit.py`, `mesh.py` | B-rep construction (contours, prisms, lofts, B-spline patches, shells) and quad meshes built from the same grids |
+| Geometry | `kit.py`, `mesh.py`, `folds.py` | B-rep construction (contours, prisms, lofts, B-spline patches, shells) and quad meshes built from the same grids; folds as a displacement field and normal-map baking |
 | Drawing | `drawing.py` | Projection, hidden-line removal, sections, details, dimensions, tables, title block, SVG |
 | Characters | `body.py`, `garment.py`, `rig.py`, `posetest.py`, `mannequin.py` | Rigged body as data, garment blocks, binding and spring bones, pose test, code-built mannequin |
 | 3D export | `build.py` | Discovering Blender, writing manifests/glTF/npz, running Blender scripts |

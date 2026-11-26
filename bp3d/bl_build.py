@@ -101,16 +101,17 @@ for key, objs in found.items():
 
 # Квадовые детали: меш уже готов (петли, UV, острые рёбра) — создаётся как есть, без сварки и пересчёта.
 # Координаты пока CAD (метры): общий поворот под Unity ниже применяется ко всем деталям одинаково.
-atlas_img = None
+atlas_img = normal_img = None
 if man.get("quads"):
     qd = np.load(man["quads"])
     if any(p.get("colored") or i["patterns"] for i in man["atlas"]["islands"] for p in [parts[i["part"]]]):
         atlas_img = C.bake_atlas(man["atlas"], os.path.join(OUT, NAME + "_atlas.png"))
+    normal_img = C.load_detail(man["atlas"], OUT, NAME) if man.get("atlas") else None
     for key, p in parts.items():
         if p.get("mesh") != "quad":
             continue
         o = C.quad_object(key, qd, orient=False)
-        o.data.materials.append(material(p, atlas_img, p.get("two_sided", False)))
+        o.data.materials.append(material(p, atlas_img, p.get("two_sided", False), normal_img))
         if p["group"] == "int":
             for c in o.users_collection:
                 c.objects.unlink(o)
@@ -125,6 +126,7 @@ if man.get("quads"):
         found[key] = [o]
         final.append(o)
     report["atlas"] = dict(px=man["atlas"]["px"], px_per_cm=man["atlas"]["px_per_cm"],
+                           normal=os.path.basename(man["atlas"]["normal"]) if man["atlas"].get("normal") else None,
                            islands=len(man["atlas"]["islands"]),
                            texture=os.path.basename(atlas_img.filepath_raw) if atlas_img else None)
 

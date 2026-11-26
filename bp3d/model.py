@@ -73,6 +73,7 @@ class Model:
     parts: list = field(default_factory=list)
     bom_extra: dict = field(default_factory=dict)   # pos -> (name, material, qty, note) для позиций без геометрии
     body: object = None     # тело персонажа (bp3d.body.Body) — для одежды; None — обычный предмет
+    atlas_px: int = 2048    # сторона атласа текстур квадовых деталей, px (цвет, нормали, маска складок)
 
     def add(self, key, pos, name, material, shape, finish="paint", group="ext", note="", count=True,
             mesh=None, bind=None, dynamics=None, layer=0, hides=None, color=None, pattern=None, info=None):

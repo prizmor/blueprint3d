@@ -16,6 +16,7 @@ What each module in `bp3d/` is responsible for, its public interface, what it de
 | [`garment.py`](#garmentpy) | ~920 | tool | garments | `Outfit` garment blocks |
 | [`rig.py`](#rigpy) | ~345 | tool | garments | Weight transfer, spring chains, colliders, body masking, dynamics export |
 | [`posetest.py`](#posetestpy) | ~280 | tool | no | Pose library, spring equilibrium, penetration measurement |
+| [`folds.py`](#foldspy) | ~330 | tool | no | Folds and fine relief: displacement field, densification, normal map and fold mask baking |
 | [`mannequin.py`](#mannequinpy) | ~140 | tool | no | Code-built `dummy_t` body |
 | [`bl_*.py`](#blender-scripts) | ~1650 | Blender | no | Scene assembly, export, atlas, renders, body export, mannequin rebuild |
 
@@ -82,6 +83,16 @@ Watch out: `bspline_surface` deliberately does **not** use `GeomAPI_PointsToBSpl
 - `slice_mesh(V, T, origin, normal)` — plane section polylines.
 - `pack_islands(sizes, pad=0.012)` — shelf packing into a square with one scale for all islands (uniform texel density).
 - `MeshShape(V, T)` — a ready triangle mesh as surroundings (the body under clothing on the drawing).
+
+## `folds.py`
+
+**Owns:** folds and fine relief as a displacement field along the surface normal from curves on it. General — works on any `QuadMesh`.
+
+- `Fold(path | uv+patch, amp, width, profile, taper, asym, offset, mode, closed, pitch)`; `resolve(surface, patches)` presses the curve onto the surface and densifies it; `field(X, N)` — displacement at points.
+- `PROFILES` — `ridge, valley, pipe, crease, groove, step, stitch`; `MODES` — `geo, normal, mask`.
+- `refine_for_folds(patches, folds, notes)` — inserts rows across `geo` folds (`REFINE_PER_WIDTH` = 2.5, `REFINE_MAX` = 4, `REFINE_ASPECT` = 5), only in directions whose edges are not welded.
+- `apply_geo(mesh, folds)` — moves outer vertices before `solidify` and syncs patch grids (`QuadMesh.sync_patches`).
+- `bake_maps(parts, atlas, px)` — normal map and fold mask by the atlas layout, analytically from the fold field; `write_png` — PNG without extra libraries.
 
 ## `drawing.py`
 
@@ -150,6 +161,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 - `solve(rig, pose)` — body bones from the pose; spring chains in **static equilibrium** (spring towards rest orientation, gravity, push-out from colliders, segment lengths kept), then chains of one zone are linked laterally: a joint follows the larger displacement of its ring neighbours by `LATERAL = 0.75`. Damping is not used.
 - `run(model, poses)` — skins every part with the FBX weights and measures: `body` (vertex under the skin of its own region), `layer` (upper layer under the outer surface of a lower one), `collider` (how far a collider pushed a chain). Depths beyond 30 mm are ignored as "other side".
 - Thresholds `PEN_BODY = PEN_LAYER = 4.0` mm, `PEN_EXTREME = 12.0` mm in `sit, squat, elbows_bent`; `limit(pose, kind)`.
+- Stretch and compression rows measure an outer-layer edge against the skin under it (`STRETCH_MAX`, `COMPRESS_MAX`, `STRETCH_EXTREME`, `STRETCH_ZONES`); `skin_self(body, Vb)` finds skin that went into another body part, penetrations there are reported as `skin` and not counted.
 - `bone_matrices(rig, pose)` — 4×4 per bone for `bl_pose.py`.
 
 ## `mannequin.py`

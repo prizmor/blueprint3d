@@ -74,15 +74,16 @@ def bind(o, WI=None, WW=None, bone=None):
 garment = bpy.data.collections.new("garment")
 sc.collection.children.link(garment)
 final = []
-atlas_img = None
+atlas_img = normal_img = None
 qd = np.load(man["quads"]) if man.get("quads") else None
 if qd is not None:
     atlas_img = C.bake_atlas(man["atlas"], os.path.join(OUT, NAME + "_atlas.png"))
+    normal_img = C.load_detail(man["atlas"], OUT, NAME)
     for key, p in parts.items():
         if p.get("mesh") != "quad":
             continue
         o = C.quad_object(key, qd, collection=garment)
-        o.data.materials.append(C.finish_material(p, atlas_img, p.get("two_sided", False)))
+        o.data.materials.append(C.finish_material(p, atlas_img, p.get("two_sided", False), normal_img))
         if key in rig["rigid"]:
             bind(o, bone=rig["rigid"][key])
         else:
@@ -240,6 +241,8 @@ report["total_tris_ext"] = report["total_tris"]
 report["total_quads"] = sum(v.get("quads", 0) for v in report["parts"].values())
 report["bbox_m"] = [list(gmn), list(gmx)]
 report["atlas"] = dict(px=man["atlas"]["px"], px_per_cm=man["atlas"]["px_per_cm"], islands=len(man["atlas"]["islands"]),
+                       normal=os.path.basename(man["atlas"]["normal"]) if man["atlas"].get("normal") else None,
+                       foldmask=os.path.basename(man["atlas"]["foldmask"]) if man["atlas"].get("foldmask") else None,
                        texture=os.path.basename(atlas_img.filepath_raw)) if atlas_img else None
 
 blend = os.path.join(OUT, NAME + ".blend")

@@ -155,17 +155,41 @@ def bake_atlas(atlas, path, pad=10, spread=28):
     return im
 
 
+def load_detail(atlas, out, name):
+    """Карта нормалей и маска складок, запечённые в Python (bp3d.folds.bake_maps): переименовать по имени
+    модели и загрузить карту нормалей как изображение (цветовое пространство Non-Color). Нет карты — None."""
+    img = None
+    for key, suffix in (("normal", "_normal.png"), ("foldmask", "_foldmask.png")):
+        src = atlas.get(key)
+        if not src or not os.path.exists(src):
+            continue
+        dst = os.path.join(out, name + suffix)
+        if os.path.abspath(src) != os.path.abspath(dst):
+            os.replace(src, dst)
+        atlas[key] = dst
+        if key == "normal":
+            img = bpy.data.images.load(dst)
+            try:
+                img.colorspace_settings.name = "Non-Color"
+            except TypeError:
+                pass
+            img.pack()
+    return img
+
+
 # ------------------------------------------------------------------ материалы
 _mats = {}
 
 
-def finish_material(p, image=None, two_sided=False):
-    """Материал детали по отделке. Квадовые детали берут цвет из атласа (image); CAD-детали — серый
-    оттенок отделки или свой цвет. Один материал на сочетание отделки и источника цвета."""
+def finish_material(p, image=None, two_sided=False, normal=None):
+    """Материал детали по отделке. Квадовые детали берут цвет из атласа (image) и рельеф из карты нормалей
+    (normal, касательное пространство); CAD-детали — серый оттенок отделки или свой цвет. Один материал на
+    сочетание отделки и источника цвета."""
     clear = p.get("group") == "glass"
     tex = image is not None and p.get("mesh") == "quad"
+    nrm = normal is not None and p.get("mesh") == "quad"
     col = None if tex else p.get("color")
-    key = p["finish"] + ("_clear" if clear else "") + ("_tex" if tex else "") + \
+    key = p["finish"] + ("_clear" if clear else "") + ("_tex" if tex else "") + ("_nrm" if nrm else "") + \
         ("_%02x%02x%02x" % tuple(int(c * 255) for c in col) if col else "") + ("_2s" if two_sided else "")
     if key in _mats:
         return _mats[key]
@@ -183,6 +207,19 @@ def finish_material(p, image=None, two_sided=False):
         t.image = image
         t.location = (-400, 300)
         nt.links.new(t.outputs["Color"], bsdf.inputs["Base Color"])
+    if nrm:
+        tn = nt.nodes.new("ShaderNodeTexImage")
+        tn.image = normal
+        try:
+            tn.image.colorspace_settings.name = "Non-Color"
+        except TypeError:
+            pass
+        tn.location = (-700, -200)
+        nm = nt.nodes.new("ShaderNodeNormalMap")
+        nm.location = (-400, -200)
+        nm.uv_map = "UVMap"
+        nt.links.new(tn.outputs["Color"], nm.inputs["Color"])
+        nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
     if clear:
         bsdf.inputs["Alpha"].default_value = 0.25
     m.diffuse_color = (*c, 0.22 if clear else 1)

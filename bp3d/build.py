@@ -52,13 +52,14 @@ def _patterns(p):
     return out
 
 
-def export_quads(model, out_dir, atlas_px=2048):
+def export_quads(model, out_dir, atlas_px=None):
     """Квадовые детали -> quads.npz (вершины, грани, UV в общем атласе, острые рёбра) + описание атласа:
     остров -> место в атласе, цвет детали и узоры (текстуру запекает Blender по этому описанию).
     Масштаб у всех островов один: плотность текселей одинакова по построению."""
     parts = [p for p in model.parts if p.mesh == "quad" and p.group not in SKIP]
     if not parts:
         return None, None, {}
+    atlas_px = int(atlas_px or getattr(model, "atlas_px", 2048) or 2048)
     sizes = [(i["w"], i["h"]) for p in parts for i in p.quad.islands]
     S, pos = pack_islands(sizes)
     arrays, entries, n = {}, {}, 0
@@ -82,7 +83,7 @@ def export_quads(model, out_dir, atlas_px=2048):
             use = [d for d in pats if isl["tag"] == OUTER and (not d.get("patch") or isl["name"].startswith(d["patch"]))]
             atlas["islands"].append(dict(part=p.key, name=isl["name"], tag=int(isl["tag"]), x=o[k][0] / S, y=o[k][1] / S,
                                          w=isl["w"] / S, h=isl["h"] / S, scale=isl["scale"], color=list(col),
-                                         patterns=use))
+                                         patterns=use, patch=isl.get("patch")))
         lo, hi = q.bbox()
         st = quad_stats(p)
         dyn = p.dynamics if isinstance(p.dynamics, (str, type(None))) else "custom"
@@ -91,7 +92,26 @@ def export_quads(model, out_dir, atlas_px=2048):
                               two_sided=q.two_sided, layer=p.layer, dynamics=dyn, **FINISHES[p.finish])
     npz = os.path.join(out_dir, "quads.npz")
     np.savez_compressed(npz, **arrays)
+    bake_detail(model, parts, atlas, out_dir)
     return npz, atlas, entries
+
+
+def bake_detail(model, parts, atlas, out_dir):
+    """Карта нормалей и маска складок по атласу, если у деталей есть складки режимов "normal" / "mask"
+    (bp3d.folds). Файлы — normal.png и foldmask.png в out_dir; путь записывается в описание атласа, сборка
+    переименовывает их по имени модели и подключает карту нормалей к материалам."""
+    from .folds import bake_maps, write_png
+    use = {p.key: (p.quad, p.info.get("folds") or []) for p in parts
+           if any(m in f.mode for f in (p.info.get("folds") or []) for m in ("normal", "mask"))}
+    if not use:
+        return
+    nrm, msk = bake_maps(use, atlas, atlas["px"])
+    if any("normal" in f.mode for _, fl in use.values() for f in fl):
+        atlas["normal"] = os.path.join(out_dir, "normal.png")
+        write_png(atlas["normal"], nrm)
+    if any("mask" in f.mode for _, fl in use.values() for f in fl):
+        atlas["foldmask"] = os.path.join(out_dir, "foldmask.png")
+        write_png(atlas["foldmask"], msk)
 
 
 def export_cad(model, out_dir, lin_defl=0.8, ang_defl=0.15):

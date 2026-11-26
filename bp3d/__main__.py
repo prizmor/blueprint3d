@@ -278,14 +278,22 @@ def cmd_posetest(obj, args):
         if k not in PT.POSES:
             sys.exit(f"нет позы {k}; есть: {', '.join(PT.POSES)}")
     rows, summary, rig = PT.run(model, poses)
+    limit_ = PT.limit
     out = os.path.abspath(args.out) if args.out else os.path.join(obj, "out", "posetest")
     os.makedirs(out, exist_ok=True)
-    kinds = {"body": "тело", "layer": "слой", "collider": "коллайдер"}
+    kinds = {"body": "тело", "layer": "слой", "collider": "коллайдер", "stretch": "растяжение", "compress": "сжатие",
+             "skin": "кожа в теле"}
     print(f"{'поза':14s} {'деталь':14s} {'вид':10s} {'мм':>6s} {'вершин':>6s}  место")
     for r in rows:
+        if r["kind"] in ("stretch", "compress"):
+            if r["depth"] <= limit_(r["pose"], r["kind"], r["where"]) * 0.8:
+                continue
+            flag = "!" if r["depth"] > limit_(r["pose"], r["kind"], r["where"]) else " "
+            print(f"{flag}{r['pose']:13s} {r['part']:14s} {kinds[r['kind']]:10s} {r['depth'] * 100:5.0f}% {r['count']:6d}  {r['where']}")
+            continue
         if r["depth"] < args.show and r["kind"] != "collider":
             continue
-        flag = "!" if r["kind"] != "collider" and r["depth"] > PT.limit(r["pose"], r["kind"]) else " "
+        flag = "!" if r["kind"] not in ("collider", "skin") and r["depth"] > PT.limit(r["pose"], r["kind"], r["where"]) else " "
         other = f" ({r['other']})" if r["other"] else ""
         print(f"{flag}{r['pose']:13s} {r['part']:14s} {kinds[r['kind']]:10s} {r['depth']:6.1f} {r['count']:6d}  {r['where']}{other}")
     renders = {}
@@ -293,7 +301,7 @@ def cmd_posetest(obj, args):
     if blend and not args.no_render:
         shots = [dict(name=f"pose_{k}", pose=PT.bone_matrices(rig, k), mode="solid", dir=(0.6, -1, 0.15), res=(900, 1300))
                  for k in poses]
-        worst = [r for r in rows if r["kind"] != "collider" and r["point"]][:4]
+        worst = [r for r in rows if r["kind"] not in ("collider", "skin") and r["point"]][:4]
         cx = model.body.center_x(model.body.lm["waist"])
         for n, r in enumerate(worst):
             p = r["point"]
@@ -311,7 +319,9 @@ def cmd_posetest(obj, args):
     print(f"поз {len(poses)}, деталей {len(summary['parts'])}; худшее: тело {summary['worst_body']:.1f} мм "
           f"(порог {PT.PEN_BODY:g}), слои {summary['worst_layer']:.1f} мм (порог {PT.PEN_LAYER:g}; в крайних позах "
           f"{', '.join(PT.EXTREME)} — {PT.PEN_EXTREME:g}), "
-          f"коллайдеры отодвигают ткань до {summary['worst_collider']:.0f} мм  ({time.time() - t:.0f} с)")
+          f"коллайдеры отодвигают ткань до {summary['worst_collider']:.0f} мм; растяжение до {summary['worst_stretch'] * 100:.0f} % "
+          f"(порог {PT.STRETCH_MAX * 100:.0f}, в крайних позах {PT.STRETCH_EXTREME * 100:.0f}), сжатие до "
+          f"{summary['worst_compress'] * 100:.0f} % (порог {PT.COMPRESS_MAX * 100:.0f})  ({time.time() - t:.0f} с)")
     print("posetest пройден" if not summary["failed"] else f"posetest НЕ пройден: строк выше порога {summary['failed']}")
     print(out)
     sys.exit(1 if summary["failed"] else 0)

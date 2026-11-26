@@ -89,7 +89,9 @@ Written by `bl_build.py` / `bl_garment.py`, extended by `build`.
 | `<NAME>.blend` | Scene: parts as objects (internal parts in collection `internal`), materials by finish; garments: armature with spring bones, skinned garments, `Body_masked` |
 | `<NAME>.fbx` | Unity axes (forward −Z, up Y), scale by units, no leaf bones; garments include the armature and `Body_masked` |
 | `<NAME>.glb` | glTF binary, Blender exporter defaults |
-| `<NAME>_atlas.png` | Colour atlas of quad parts (2048 px; island colours, patterns, 10 px padding + dilation) |
+| `<NAME>_atlas.png` | Colour atlas of quad parts (`Model.atlas_px`, 2048 px by default; island colours, patterns, 10 px padding + dilation) |
+| `<NAME>_normal.png` | Tangent-space normal map of quad parts (OpenGL Y+, same layout as the atlas), baked from folds with mode `normal`; only when such folds exist |
+| `<NAME>_foldmask.png` | Fold mask for the artist (grey, brightness — fold strength), from folds with mode `mask` |
 | `render_*.png` | Check renders (Workbench): views, perspectives, wireframes |
 | `manifest.json` | Intermediate: what was sent to Blender (see below) |
 | `blender.log` | Blender stdout + stderr of the last run |
@@ -155,8 +157,8 @@ Map it to the engine's spring-bone component (UniVRM SpringBone, Magica Cloth Bo
 | `poses`, `parts` | what was tested |
 | `thresholds` | `{body, layer, extreme, extreme_poses}` mm |
 | `failed` | true if any row exceeds its threshold |
-| `worst_body`, `worst_layer`, `worst_collider` | deepest values, mm |
-| `rows` | `[{pose, part, kind: body|layer|collider, other, depth, count, where, point, rest}]` — deepest per pose/part/kind; `where` is the nearest landmark |
+| `worst_body`, `worst_layer`, `worst_collider`, `worst_skin`, `worst_stretch`, `worst_compress` | deepest values, mm |
+| `rows` | `[{pose, part, kind: body|layer|collider|skin|stretch|compress, other, depth, count, where, point, rest}]` — deepest per pose/part/kind; `where` is the nearest landmark |
 | `renders` | `{name: file}` |
 | `spec_hash` | hash of the tested specification |
 
