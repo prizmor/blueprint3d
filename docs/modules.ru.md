@@ -140,7 +140,7 @@
 - Константы: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` мм, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, пресеты `DYNAMICS = {stiff, soft, rigid}` (жёсткость, затухание, гравитация, радиус).
 - `Piece(patches, t, edges, solid, joints, name)` — сетки внешней поверхности с именованными краями, к которым крепятся другие блоки; суставы — для проверки петель у суставов.
 - `Outfit(model, body, cols=48)` — выставляет `model.body`, добавляет тело как деталь `phantom`; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` сваривает куски в одну квадовую деталь с толщиной и заполняет `info` (зазор, суставы, области, подкладка).
-- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`; помощники `waist_ring`, `push_over`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
+- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`; помощники `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
 
 ## `rig.py`
 

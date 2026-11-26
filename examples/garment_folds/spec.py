@@ -49,12 +49,16 @@ def build_model():
     O.add("shorts_band", 4, "Пояс на резинке", "Резинка", O.waistband(shorts, width=34), finish="cloth", color="sand",
           layer=3)
 
-    # кроссовки: колодка, подошва-чаша, кант, язычок, шнуровка
+    # кроссовки — жёсткая модель (fit="rigid"): колодка, подошва-чаша, накладки носка и задника со строчкой
+    # (shoe_overlays), кант, язычок и накладки под люверсы, прижатые к верху, петля на пятке, протектор и
+    # полоса по боковине подошвы в карте нормалей (shoe_tread)
     for s in "LR":
-        shoe = O.shoe(s, shaft=0.94, sole=18.0, rand=11.0, ease=3.5, toe_height=40.0, cols=24, name=f"shoe_{s}")
-        blocks, laces = O.sneaker_details(shoe, tongue_w=42, eyelets=4)
-        O.add(f"shoe_{s}", 5, "Кроссовок", "Текстиль, ЭВА", [shoe] + blocks, finish="leather", color="white", layer=2,
-              hides=True, count=(s == "L"), pattern=[dict(kind="fill", color="slate", patch=f"shoe_{s}_sole")])
+        shoe = O.shoe(s, shaft=0.94, sole=18.0, rand=11.0, ease=3.5, toe_height=40.0, cols=32, name=f"shoe_{s}")
+        caps = O.shoe_overlays(shoe, toe_cap=58.0, heel_counter=56.0)
+        blocks, laces = O.sneaker_details(shoe, tongue_w=42, eyelets=4, eyestay=14.0, pull_tab=22.0, over=caps)
+        O.add(f"shoe_{s}", 5, "Кроссовок", "Текстиль, ЭВА", [shoe] + caps + blocks, finish="leather", color="white",
+              layer=2, hides=True, count=(s == "L"), folds=O.shoe_tread(shoe, pattern="bars"),
+              pattern=[dict(kind="fill", color="slate", patch=f"shoe_{s}_sole")])
         O.add(f"laces_{s}", 6, "Шнурки", "Полиэстер", laces, finish="plastic", color="ink", layer=3, count=(s == "L"))
     return M
 

@@ -140,7 +140,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 - Constants: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` mm, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, `DYNAMICS = {stiff, soft, rigid}` presets (stiffness, damping, gravity, radius).
 - `Piece(patches, t, edges, solid, joints, name)` — outer-surface grids with named edges other blocks attach to; joints for the joint-loop check.
 - `Outfit(model, body, cols=48)` — sets `model.body`, adds the body as a `phantom` part; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` welds pieces into one quad part with thickness and fills `info` (gap, joints, regions, lining).
-- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`; helpers `waist_ring`, `push_over`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
+- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`; helpers `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
 
 ## `rig.py`
 
