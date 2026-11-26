@@ -26,11 +26,77 @@ LATERAL = 0.75          # доля, на которую сустав цепоч�
 NEAR = 30.0             # мм: глубже этого точка уже «с другой стороны», а не протыкание
 
 
-def limit(pose, kind):
-    """Порог проникновения для позы и вида проверки, мм."""
+# Растяжение и сжатие ткани считаются СВЕРХ кожи под ней: линейный скиннинг сам тянет кожу манекена у подмышки
+# в позе «руки вверх» в разы, и облегающая вещь не может тянуться меньше. Ошибка — когда ткань тянется или
+# сминается сильнее кожи под ней: это делают веса (резкий переход между костями), а не поза.
+STRETCH_MAX = 0.60      # доля: ребро наружного слоя растянуто сильнее кожи под ним больше чем на 60 %
+COMPRESS_MAX = 0.70     # доля: ребро сжато сильнее кожи под ним больше чем на 70 %
+STRETCH_EXTREME = 0.90  # растяжение сверх кожи в крайних позах (EXTREME)
+# В паху и подмышке ткань между двумя разведёнными костями тянется и в жизни (шаговый шов на широком шаге,
+# бок под поднятой рукой); у локтя и колена — сгиб. Пороги растяжения по зонам (ближайший ориентир):
+# Пах: шаговый шов свободных низов на широком шаге тянется на 97–107 % сверх кожи при любых настройках весов
+# (замер на шортах и брюках образцов) — порог 110 % предложен и требует утверждения.
+STRETCH_ZONES = {"пах": 1.10, "подмышка": 0.90, "локоть": 0.75, "колено": 0.75}
+
+
+def limit(pose, kind, where=""):
+    """Порог проникновения (мм) или растяжения / сжатия (доля) для позы, вида проверки и места."""
+    if kind == "stretch":
+        zone = next((v for k, v in STRETCH_ZONES.items() if where.startswith(k)), STRETCH_MAX)
+        return max(zone, STRETCH_EXTREME) if pose in EXTREME else zone
+    if kind == "compress":
+        return COMPRESS_MAX
     if pose in EXTREME:
         return PEN_EXTREME
     return PEN_BODY if kind == "body" else PEN_LAYER
+
+
+SELF_NEAR = 60.0        # мм: кожа «сама в себе» — вошла в часть тела дальше этого по телу в покое
+
+
+def skin_self(body, Vb, k=48):
+    """Вершины кожи, которые в позе сами ушли внутрь другой части тела (икра в бедро в приседе, живот в бедро
+    сидя): линейный скиннинг сминает внутреннюю сторону сильного сгиба. Ткань, попавшая туда, проникает в кожу,
+    которая сама проникла в тело, — это не ошибка вещи, а предел позы; posetest считает такие места отдельно."""
+    from scipy.spatial import cKDTree
+    from .body import closest_on_tris
+    T = body.T
+    Cp = Vb[T].mean(axis=1)
+    C0 = body.V[T].mean(axis=1)
+    Nt = np.cross(Vb[T[:, 1]] - Vb[T[:, 0]], Vb[T[:, 2]] - Vb[T[:, 0]])
+    Nt /= np.maximum(np.linalg.norm(Nt, axis=1, keepdims=True), 1e-12)
+    _, cand = cKDTree(Cp).query(Vb, k=k)
+    far = np.linalg.norm(C0[cand] - body.V[:, None, :], axis=2) > SELF_NEAR      # не своя окрестность
+    best = np.full(len(Vb), np.inf)
+    sign = np.ones(len(Vb))
+    for j in range(cand.shape[1]):
+        ok = far[:, j]
+        if not ok.any():
+            continue
+        r = np.nonzero(ok)[0]
+        tt = cand[r, j]
+        P = Vb[r]
+        A, B_, C_ = Vb[T[tt, 0]], Vb[T[tt, 1]], Vb[T[tt, 2]]
+        bc = closest_on_tris(P, A, B_, C_)
+        X = bc[:, :1] * A + bc[:, 1:2] * B_ + bc[:, 2:] * C_
+        d = np.linalg.norm(P - X, axis=1)
+        better = d < best[r]
+        idx = r[better]
+        best[idx] = d[better]
+        sign[idx] = np.sign(np.einsum("ij,ij->i", (P - X)[better], Nt[tt][better]))
+    return (sign < 0) & (best < 40.0)
+
+
+def _edges(q):
+    """Рёбра наружного слоя квадовой детали: (K, 2) пары вершин."""
+    F = q.F[q.face_tag == OUTER]
+    E = []
+    for a, b in ((0, 1), (1, 2), (2, 3), (3, 0)):
+        ok = (F[:, a] >= 0) & (F[:, b] >= 0)
+        E.append(np.stack([F[ok, a], F[ok, b]], 1))
+    E = np.sort(np.vstack(E), axis=1)
+    E = np.unique(E[E[:, 0] != E[:, 1]], axis=0)
+    return E
 
 # Позы: {роль кости: поворот}. Ключ без стороны ставит обе стороны зеркально (вектор задаётся для ЛЕВОЙ
 # стороны: левая сторона персонажа — −Y, перёд — −X, верх — +Z). Формы поворота:
@@ -224,10 +290,26 @@ def run(model, poses=None):
     parts = [p for p in rig.parts if p.mesh == "quad"]
     tri_reg = body.treg
     rows = []
+    from scipy.spatial import cKDTree
+    BE = np.unique(np.sort(np.vstack([body.T[:, [0, 1]], body.T[:, [1, 2]], body.T[:, [2, 0]]]), axis=1), axis=0)
+    bl0 = np.maximum(np.linalg.norm(body.V[BE[:, 0]] - body.V[BE[:, 1]], axis=1), 1e-9)
+    btree = cKDTree(body.V)
+    near_body = {}
+    for p in parts:
+        E = _edges(p.quad)
+        if len(E):
+            near_body[p.key] = btree.query((p.quad.V[E[:, 0]] + p.quad.V[E[:, 1]]) / 2, k=6)[1]
     for name in poses:
         M, press = solve(rig, POSES[name] if isinstance(name, str) else name)
         Vb = skin_points(body.V, np.pad(body.W, ((0, 0), (0, 0))), M[: body.W.shape[1]])
         Sb = Surface(Vb, body.T)
+        collapsed = skin_self(body, Vb)[body.T].any(axis=1)              # треугольники кожи, ушедшие в тело
+        br = np.linalg.norm(Vb[BE[:, 0]] - Vb[BE[:, 1]], axis=1) / bl0          # растяжение кожи по рёбрам
+        skin_hi = np.ones(len(body.V))
+        skin_lo = np.ones(len(body.V))
+        for c in (0, 1):
+            np.maximum.at(skin_hi, BE[:, c], br)
+            np.minimum.at(skin_lo, BE[:, c], br)
         posed, outer = {}, {}
         for p in parts:
             q = p.quad
@@ -235,6 +317,7 @@ def run(model, poses=None):
             posed[p.key] = Vp
             reg, dyn = _regions_for(rig, p.key, rig.W[p.key])
             depth = np.zeros(len(Vp))
+            skin_depth = np.zeros(len(Vp))
             groups = [(np.nonzero((reg == r) & ~dyn)[0], tri_reg == r) for r in range(6)]
             groups.append((np.nonzero(dyn)[0], np.isin(tri_reg, (0, 4, 5))))
             for sel, tmask in groups:
@@ -243,7 +326,31 @@ def run(model, poses=None):
                 h = Sb.closest(Vp[sel], tmask, k=8)
                 d = h["dist"]
                 bad = (d < 0) & (d > -NEAR) & ~rig.hidden[h["tri"]]
-                depth[sel[bad]] = -d[bad]
+                selfc = bad & collapsed[h["tri"]]
+                depth[sel[bad & ~selfc]] = -d[bad & ~selfc]
+                skin_depth[sel[selfc]] = -d[selfc]
+            # растяжение и сжатие ткани: длины рёбер наружного слоя в позе против покоя
+            E = _edges(q)
+            if len(E):
+                l0 = np.linalg.norm(q.V[E[:, 0]] - q.V[E[:, 1]], axis=1)
+                l1 = np.linalg.norm(Vp[E[:, 0]] - Vp[E[:, 1]], axis=1)
+                ok = l0 > 0.3
+                r = np.where(ok, l1 / np.maximum(l0, 1e-9), 1.0)
+                nb = near_body[p.key]
+                s_hi = skin_hi[nb].mean(axis=1)                 # кожа под ребром ткани
+                s_lo = skin_lo[nb].mean(axis=1)
+                for kind_, val in (("stretch", r - s_hi), ("compress", s_lo - r)):
+                    j = int(np.argmax(val))
+                    if val[j] > 0.15:
+                        mid = (q.V[E[j, 0]] + q.V[E[j, 1]]) / 2
+                        wh = body.nearest_landmark(mid)
+                        rows.append(dict(pose=name, part=p.key, kind=kind_, other="", depth=float(val[j]),
+                                         count=int((val > limit(name, kind_, wh)).sum()), where=wh,
+                                         point=((Vp[E[j, 0]] + Vp[E[j, 1]]) / 2).tolist(), rest=mid.tolist()))
+            if skin_depth.max() > 0.05:
+                i = int(skin_depth.argmax())
+                rows.append(dict(pose=name, part=p.key, kind="skin", other="кожа сама вошла в тело", depth=float(skin_depth[i]),
+                                 count=0, where=body.nearest_landmark(q.V[i]), point=Vp[i].tolist(), rest=q.V[i].tolist()))
             if depth.max() > 0.05:
                 i = int(depth.argmax())
                 rows.append(dict(pose=name, part=p.key, kind="body", other="", depth=float(depth[i]),
@@ -298,12 +405,15 @@ def run(model, poses=None):
         if k not in best or r["depth"] > best[k]["depth"]:
             best[k] = r
     rows = sorted(best.values(), key=lambda r: (-(r["kind"] != "collider"), -r["depth"]))
-    fails = [r for r in rows if r["kind"] != "collider" and r["depth"] > limit(r["pose"], r["kind"])]
+    fails = [r for r in rows if r["kind"] not in ("collider", "skin") and r["depth"] > limit(r["pose"], r["kind"], r["where"])]
     summary = dict(poses=list(poses), parts=[p.key for p in parts],
                    thresholds=dict(body=PEN_BODY, layer=PEN_LAYER, extreme=PEN_EXTREME, extreme_poses=list(EXTREME)),
                    failed=len(fails), worst_body=max([r["depth"] for r in rows if r["kind"] == "body"], default=0.0),
                    worst_layer=max([r["depth"] for r in rows if r["kind"] == "layer"], default=0.0),
-                   worst_collider=max([r["depth"] for r in rows if r["kind"] == "collider"], default=0.0))
+                   worst_collider=max([r["depth"] for r in rows if r["kind"] == "collider"], default=0.0),
+                   worst_stretch=max([r["depth"] for r in rows if r["kind"] == "stretch"], default=0.0),
+                   worst_skin=max([r["depth"] for r in rows if r["kind"] == "skin"], default=0.0),
+                   worst_compress=max([r["depth"] for r in rows if r["kind"] == "compress"], default=0.0))
     return rows, summary, rig
 
 

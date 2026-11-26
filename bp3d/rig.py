@@ -18,6 +18,15 @@ from .mesh import RIM
 from .body import REGIONS
 
 MAX_INFLUENCES = 4
+# Стратегии привязки (поле bind): "auto"/"tight" — облегающая, веса с ближайшей точки тела; "proxy"/"loose" —
+# свободная, веса с раздутого и сглаженного прокси-тела (Body.proxy); имя кости или роль — жёсткая деталь;
+# dict(mode="segments", bone=..., cuts=[...]) — жёсткая деталь из нескольких сегментов (обувь, броня, щитки):
+# вершины на кости bone, за каждой секущей плоскостью — на кости этой плоскости, с плавным переходом blend мм.
+BIND_ALIASES = {"tight": "auto", "loose": "proxy"}
+PROXY_FROM = (10.0, 22.0)  # зазор ткани до тела, мм: ближе первого — веса с кожи, дальше второго — с прокси
+WEIGHT_MIN_LOOSE = 0.03    # свободная вещь: влияния меньше этого отбрасываются мягко (до выбора MAX_INFLUENCES)
+SMOOTH_MM_TIGHT = 20.0    # сглаживание весов по поверхности вещи, мм: облегающая (bind="auto")
+SMOOTH_MM_LOOSE = 45.0    # свободная (bind="proxy"); своё значение — bind=dict(mode=..., smooth_mm=...)
 
 
 def _dyn_list(part):
@@ -134,8 +143,41 @@ def _smooth_weights(W, F, it=2):
     return W
 
 
-def _limit(W, k=MAX_INFLUENCES):
-    """Оставить k наибольших влияний на вершину и нормировать."""
+def _smooth_weights_mm(W, V, F, radius):
+    """Сглаживание весов по поверхности вещи на радиус radius (мм): неявная диффузия (I + t·L) W' = W
+    с лапласианом по рёбрам, вес ребра 1/длина². В отличие от сглаживания «по соседям» охватывает одно и то же
+    расстояние и на мелкой сетке у сустава, и на крупной: перепад весов у подмышки и паха растягивается на
+    несколько сантиметров ткани, а не на одно короткое ребро."""
+    from scipy.sparse import coo_matrix, identity
+    from scipy.sparse.linalg import splu
+    E = []
+    for a, b in ((0, 1), (1, 2), (2, 3), (3, 0)):
+        ok = (F[:, a] >= 0) & (F[:, b] >= 0)
+        E.append(np.stack([F[ok, a], F[ok, b]], 1))
+    tri = F[:, 3] < 0
+    E.append(np.stack([F[tri, 2], F[tri, 0]], 1))
+    E = np.unique(np.sort(np.vstack(E), axis=1), axis=0)
+    E = E[E[:, 0] != E[:, 1]]
+    n = len(V)
+    l2 = np.maximum(np.sum((V[E[:, 0]] - V[E[:, 1]]) ** 2, axis=1), 1e-4)
+    w = 1.0 / l2
+    A = coo_matrix((np.concatenate([w, w]), (np.concatenate([E[:, 0], E[:, 1]]), np.concatenate([E[:, 1], E[:, 0]]))),
+                   shape=(n, n)).tocsc()
+    L = coo_matrix((np.asarray(A.sum(axis=1)).ravel(), (np.arange(n), np.arange(n))), shape=(n, n)).tocsc() - A
+    lu = splu((identity(n, format="csc") + (radius ** 2 / 4.0) * L).tocsc())
+    out = lu.solve(np.asarray(W, np.float64))
+    return np.clip(out, 0.0, None).astype(np.float32)
+
+
+def _limit(W, k=MAX_INFLUENCES, w_min=0.0):
+    """Оставить k наибольших влияний на вершину и нормировать. Влияния меньше w_min (WEIGHT_MIN) отбрасываются:
+    хвост сглаживания в 3–4 % от далёкой кости (бедро на животе) при её повороте на 90° сдвигает точку на
+    сантиметр, а у соседней вершины четвёртым влиянием оказывается другая кость — ткань рвётся. Для свободных
+    вещей (bind="proxy") по умолчанию WEIGHT_MIN_LOOSE, для облегающих — 0 (их веса и так как у кожи). Отсечение
+    мягкое (из всех влияний, кроме главного, вычитается w_min): вес плавно уходит в ноль, без скачка."""
+    if w_min > 0:                      # мягкое отсечение: w − w_min, без скачка на границе отсечения
+        top = W.max(axis=1, keepdims=True)
+        W = np.where(W >= top, W, np.maximum(W - w_min, 0.0))
     if W.shape[1] > k:
         idx = np.argpartition(-W, k - 1, axis=1)[:, :k]
         M = np.zeros_like(W)
@@ -207,7 +249,14 @@ class Rig:
         for p in self.parts:
             b = p.bind if p.bind is not None else "auto"
             mode = b.get("mode", "auto") if isinstance(b, dict) else b
-            if mode != "auto":
+            mode = BIND_ALIASES.get(mode, mode)
+            if mode == "segments":                     # квадовая — весами по сегментам, CAD — на основной кости
+                if p.mesh == "quad":
+                    self.W[p.key] = self._segments(p.quad.V, b, nb)
+                else:
+                    self.rigid[p.key] = body.bone(b["bone"])
+                continue
+            if mode not in ("auto", "proxy"):
                 self.rigid[p.key] = body.bone(mode)
                 if p.mesh == "quad":
                     W = np.zeros((len(p.quad.V), nb), np.float32)
@@ -219,8 +268,31 @@ class Rig:
                 c = np.array([[(bb.min.X + bb.max.X) / 2, (bb.min.Y + bb.max.Y) / 2, (bb.min.Z + bb.max.Z) / 2]])
                 self.rigid[p.key] = int(body.weights_at(c)[0].argmax())
                 continue
-            self.W[p.key] = self._auto(p, b if isinstance(b, dict) else {}, nb)
+            opt = dict(b) if isinstance(b, dict) else {}
+            if mode == "proxy":                        # свободная вещь: веса с раздутого сглаженного тела
+                opt.setdefault("proxy", dict(inflate=float(opt.pop("inflate", 25.0)), smooth=int(opt.pop("proxy_smooth", 12))))
+                opt.setdefault("smooth", 4)
+                opt.setdefault("smooth_mm", SMOOTH_MM_LOOSE)
+                opt.setdefault("w_min", WEIGHT_MIN_LOOSE)
+            opt.setdefault("smooth_mm", SMOOTH_MM_TIGHT)
+            self.W[p.key] = self._auto(p, opt, nb)
         self.hidden = self._hidden()
+
+    def _segments(self, V, opt, nb):
+        """Жёсткая привязка по сегментам: все вершины на кости opt["bone"]; каждая секущая из opt["cuts"]
+        (dict(bone, point, normal, blend)) забирает вершины по ту сторону плоскости, куда смотрит normal,
+        с плавным переходом шириной blend мм по обе стороны плоскости. Секущие применяются по порядку.
+        Внутри сегмента деталь не деформируется — только поворачивается с костью."""
+        W = np.zeros((len(V), nb), np.float32)
+        W[:, self.body.bone(opt["bone"])] = 1.0
+        for c in opt.get("cuts", ()):
+            n = np.asarray(c["normal"], float)
+            n = n / max(np.linalg.norm(n), 1e-9)
+            bl = max(float(c.get("blend", 20.0)), 1e-3)
+            s = smoothstep(((V - np.asarray(c["point"], float)) @ n) / bl + 0.5).astype(np.float32)
+            W *= (1.0 - s)[:, None]
+            W[:, self.body.bone(c["bone"])] += s
+        return _limit(W)
 
     def _auto(self, p, opt, nb):
         body, q = self.body, p.quad
@@ -237,8 +309,23 @@ class Rig:
             for nm in set(names[side == i].tolist()):
                 regs = [r for r in base[i] if (not want or r in want) and (nm not in pr or r in pr[nm])]
                 m = (side == i) & (names == nm)
-                Wb[m] = body.weights_at(V[m], regions=regs or list(pr.get(nm) or want or REGIONS), roles=opt.get("roles"))
+                rr = regs or list(pr.get(nm) or want or REGIONS)
+                Wt = body.weights_at(V[m], regions=rr, roles=opt.get("roles"))
+                if opt.get("proxy"):
+                    # прокси — только там, где ткань висит свободно: у тела (резинка, пояс, облегающий верх)
+                    # веса с кожи, дальше PROXY_FROM мм — с прокси, между — плавно
+                    Wp = body.weights_at(V[m], regions=rr, roles=opt.get("roles"), proxy=opt["proxy"])
+                    gap = body.closest(V[m])["dist"]
+                    a0, a1 = opt.get("proxy_from", PROXY_FROM)
+                    k = np.clip((gap - a0) / max(a1 - a0, 1e-6), 0.0, 1.0)[:, None]
+                    k = k * k * (3 - 2 * k)
+                    Wb[m] = Wt * (1 - k) + Wp * k
+                else:
+                    Wb[m] = Wt
         Wb = _smooth_weights(Wb, q.F, int(opt.get("smooth", 2)))
+        if opt.get("smooth_mm", 0) > 0:                  # сглаживание по расстоянию (подмышка, пах)
+            Wb = _smooth_weights_mm(Wb, q.V, q.F, float(opt["smooth_mm"]))
+            Wb /= np.maximum(Wb.sum(axis=1, keepdims=True), 1e-9)
         W = np.zeros((len(V), nb), np.float32)
         W[:, :nb0] = Wb
         for c in [c for c in self.chains if c["part"] == p.key]:
@@ -266,7 +353,7 @@ class Rig:
         # доля тела уменьшается на долю динамики
         dyn = W[:, nb0:].sum(axis=1, keepdims=True)
         W[:, :nb0] *= np.clip(1.0 - dyn, 0.0, 1.0)
-        return _limit(W)
+        return _limit(W, w_min=float(opt.get("w_min", 0.0)))
 
     def _hidden(self):
         """Скрытые треугольники тела: все три вершины закрыты вещью с hides."""

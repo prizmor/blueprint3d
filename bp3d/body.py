@@ -381,7 +381,33 @@ class Body:
         минус внутри тела), point, tri (индекс треугольника), bary, normal (наружу)."""
         return self._surf.closest(P, tri_mask, k)
 
-    def weights_at(self, P, regions=None, roles=None, hit=None):
+    def proxy(self, inflate=25.0, smooth=12):
+        """Прокси-тело для свободной одежды: тело, раздутое по нормалям на inflate мм и сглаженное, с весами,
+        сглаженными по связности меша smooth раз. Свободная вещь берёт веса с него, а не с ближайшей точки
+        кожи: в паху и подмышке веса соседних костей перемешаны плавно, и ткань не тянется в тряпку.
+        Возвращает (Surface прокси, веса (N, кости)); кешируется по параметрам."""
+        key = (round(float(inflate), 3), int(smooth))
+        cache = self.__dict__.setdefault("_proxy", {})
+        if key in cache:
+            return cache[key]
+        from scipy.sparse import coo_matrix
+        T = self.T
+        E = np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+        n = len(self.V)
+        A = coo_matrix((np.ones(2 * len(E)), (np.concatenate([E[:, 0], E[:, 1]]), np.concatenate([E[:, 1], E[:, 0]]))),
+                       shape=(n, n)).tocsr()
+        A.data[:] = 1.0
+        deg = np.maximum(np.asarray(A.sum(axis=1)).ravel(), 1.0)[:, None]
+        V = self.V + self.N * float(inflate)
+        W = self.W.astype(np.float64)
+        for _ in range(int(smooth)):
+            V = 0.5 * V + 0.5 * (A @ V) / deg
+            W = 0.5 * W + 0.5 * (A @ W) / deg
+        W /= np.maximum(W.sum(axis=1, keepdims=True), 1e-9)
+        cache[key] = (Surface(V, T), W.astype(np.float32))
+        return cache[key]
+
+    def weights_at(self, P, regions=None, roles=None, hit=None, proxy=None):
         """Веса скиннинга для точек P: перенос с ближайшей поверхности тела с интерполяцией внутри
         треугольника. regions / roles ограничивают донорскую часть тела (рукав берёт веса только с руки,
         чулок — только со своей ноги): иначе точка у подмышки или между ног схватит чужую кость."""
@@ -392,14 +418,16 @@ class Body:
             rw = self.role_weight(roles)
             m2 = rw[self.T].mean(axis=1) > 0.5
             mask = m2 if mask is None else (mask & m2)
-        h = hit if hit is not None else self.closest(P, mask, k=10 if mask is not None else 6)
+        surf, W = (self._surf, self.W) if proxy is None else self.proxy(**proxy)
+        k = 10 if mask is not None else 6
+        h = hit if hit is not None else surf.closest(P, mask, k=k)
         bad = ~np.isfinite(h["dist"])
         if bad.any():                               # рядом нет треугольников нужной области — искать по всем
-            h2 = self.closest(np.asarray(P, float).reshape(-1, 3)[bad])
+            h2 = surf.closest(np.asarray(P, float).reshape(-1, 3)[bad])
             for key in ("tri", "bary"):
                 h[key][bad] = h2[key]
         Tt = self.T[h["tri"]]
-        return (h["bary"][:, :, None] * self.W[Tt]).sum(axis=1)
+        return (h["bary"][:, :, None] * W[Tt]).sum(axis=1)
 
     def push_out(self, G, clearance, iters=3, cells=True):
         """Вытолкнуть точки сетки из тела до отступа не меньше clearance (мм): точка ближе — сдвигается

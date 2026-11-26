@@ -109,7 +109,7 @@ build <folder> [--force] [--out DIR] [--lin MM] [--ang RAD]
 ## render
 
 ```
-render <folder> [--color NAME] [--hero-only] [--model FILE.blend] [--out DIR] [--pose NAME]
+render <folder> [--color NAME] [--hero-only] [--model FILE.blend] [--out DIR] [--pose NAME] [--inspect KEYS]
 ```
 
 | Параметр | По умолчанию | Значение |
@@ -119,6 +119,7 @@ render <folder> [--color NAME] [--hero-only] [--model FILE.blend] [--out DIR] [-
 | `--model` | первый `out/model/*.blend` без `lookdev` в имени | Модель для рендера |
 | `--out` | `<folder>/out/render` | Папка вывода |
 | `--pose` | `hero` | Одежда: поза для кадров |
+| `--inspect` | — | Одежда: осмотр формы перечисленных деталей (ключи через запятую): светлый матовый материал с картой нормалей вещи, свет со всех сторон, включая снизу, шесть ракурсов `inspect_front/back/left/right/top/bottom.png`; поза покоя или `--pose` |
 
 Жёсткие предметы: `bl_render.py` в Blender (профиль пользователя, а не заводские настройки), Cycles, шесть кадров; записывает `render_<color>.json`. Одежда: `bl_pose.py` — тун спереди/сзади (+ сбоку, поза покоя, матовый, каркас без `--hero-only`); записывает `render.json`. Оба копируют `spec_hash` и `draft` из `report.json` модели.
 

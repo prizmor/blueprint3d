@@ -587,6 +587,8 @@ def build_body(model, S):
         draw_view(sh, pv, vis, hid, ivis + ihid)
         if v.get("dynamics") and getattr(model, "body", None) is not None:
             draw_dynamics(sh, pv, model, sel)
+        if v.get("folds"):
+            draw_folds(sh, pv, proj, sel)
         if v.get("clip"):
             sh.end_clip()
         if v.get("title"):
@@ -831,14 +833,28 @@ def table_measures(sh, body, at):
     _table(sh, at, "МЕРКИ ТЕЛА, мм", [(58, "Мерка"), (16, "Значение")], rows, rh=4.0, size=2.1)
 
 
+def bind_label(b):
+    """Подпись привязки для таблиц листа: веса с кожи, прокси-тело, жёстко по сегментам или одна кость."""
+    from .rig import BIND_ALIASES
+    b = "auto" if b is None else b
+    mode = BIND_ALIASES.get(b.get("mode", "auto") if isinstance(b, dict) else b, None)
+    mode = mode or (b.get("mode", "auto") if isinstance(b, dict) else b)
+    if mode == "auto":
+        return "веса тела"
+    if mode == "proxy":
+        return "прокси-тело"
+    if mode == "segments":
+        return "жёстко: " + ", ".join([b["bone"]] + [c["bone"] for c in b.get("cuts", ())])
+    return f"кость {mode}"
+
+
 def _dyn_rows(model):
     from .rig import _dyn_list, chains as rig_chains
     rows = []
     for p in model.parts:
         if p.group in ("phantom", "theory"):
             continue
-        b = p.bind if p.bind is not None else "auto"
-        bind = "веса тела" if (b == "auto" or isinstance(b, dict)) else f"кость {b}"
+        bind = bind_label(p.bind)
         zones = _dyn_list(p) if p.mesh == "quad" else []
         if not zones:
             rows.append((p, bind, None, 0, 0))
@@ -858,8 +874,7 @@ def table_layers(sh, model, at):
         seen.add(p.pos)
         gap = f"{p.info.get('gap', 0):g}" if p.layer else "—"
         th = f"{p.info.get('thickness', 0):g}" if p.mesh == "quad" else "—"
-        b = p.bind if p.bind is not None else "auto"
-        bind = "веса тела" if (b == "auto" or isinstance(b, dict)) else f"кость {b}"
+        bind = bind_label(p.bind)
         rows.append([f"{p.pos}  {p.name}", str(p.layer) if p.layer else "—", gap, th, bind, "да" if p.hides else "—"])
     _table(sh, at, "СЛОИ И ПРИВЯЗКА", [(46, "Поз. Деталь"), (10, "Слой"), (15, "Отступ"), (13, "Толщ."), (24, "Привязка"), (14, "Тело")],
            rows)
@@ -878,6 +893,38 @@ def table_dynamics(sh, model, at):
         rows = [["нет зон динамики", "", "", "", "", "", "", ""]]
     _table(sh, at, "ДИНАМИКА (кости с пружиной)", [(42, "Поз. Деталь"), (18, "Режим"), (16, "Цеп.×кост."), (13, "Жёстк."),
                                                  (13, "Затух."), (13, "Тяжесть"), (13, "Радиус"), (12, "Старт v")], rows)
+
+
+def draw_folds(sh, pv, proj, sel):
+    """Складки на виде: линии кривых складок режима "geo" — только на стороне, обращённой к зрителю
+    (по нормали поверхности детали). Гребень — штрих с точкой, впадина и залом — короткий штрих."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+    d = np.asarray(CAMERAS[proj.kind][0], float) if proj.kind in CAMERAS else None
+    for p in sel:
+        fl = [f for f in (p.info.get("folds") or []) if "geo" in f.mode and f.P is not None]
+        if not fl or p.quad is None:
+            continue
+        q = p.quad
+        outer = np.nonzero(q.vside == 0)[0]
+        tree = cKDTree(q.V[outer])
+        N = q.vertex_normals()[outer]
+        for f in fl:
+            vis = np.ones(len(f.P), bool)
+            if d is not None:
+                vis = (N[tree.query(f.P)[1]] @ d) < -0.05
+            cls = "fold" if f.profile in ("ridge", "pipe", "crease") else "fold2"
+            run = []
+            for k, q3 in enumerate(f.P):
+                if vis[k]:
+                    run.append(pv.s(tuple(q3)))
+                elif len(run) > 1:
+                    sh.pl(run, cls)
+                    run = []
+                else:
+                    run = []
+            if len(run) > 1:
+                sh.pl(run, cls)
 
 
 def draw_dynamics(sh, pv, model, sel):
@@ -942,7 +989,7 @@ def legend(sh, at, garment=False):
     sh.text(x, y + 33, "Размеры в мм. Все линии видов вычислены из 3D-модели (Blueprint3D).", 2.5, anchor="start")
     if garment:
         items = [("ph", "тело (обстановка)"), ("dyn", "цепочка костей: пружинит"), ("dyn2", "цепочка костей: обвисает"),
-                 ("dynz", "начало зоны динамики")]
+                 ("dynz", "начало зоны динамики"), ("fold", "складка: гребень"), ("fold2", "складка: впадина, залом")]
         for i, (c, s) in enumerate(items):
             yy = y + 6 + i * 5
             sh.line(x + 190, yy, x + 212, yy, c)
@@ -1017,6 +1064,8 @@ text{{fill:var(--ink);font-family:'ISOCPEUR','GOST type A','Arial Narrow',Arial,
 .dyn{{stroke:var(--ink);stroke-width:.6;fill:none;stroke-dasharray:3.2 1;stroke-linecap:round}}
 .dyn2{{stroke:var(--ink);stroke-width:.5;fill:none;stroke-dasharray:.2 1.3;stroke-linecap:round}}
 .dynz{{stroke:var(--ink);stroke-width:.2;fill:none;stroke-dasharray:1 1}}
+.fold{{stroke:var(--ink);stroke-width:.18;fill:none;stroke-dasharray:3 .8 .4 .8;opacity:.85}}
+.fold2{{stroke:var(--ink);stroke-width:.18;fill:none;stroke-dasharray:1.2 .8;opacity:.85}}
 .blk{{fill:var(--ink)}}
 .hat{{fill:url(#hatch)}}
 .hat2{{fill:url(#hatch2)}}

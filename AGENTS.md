@@ -54,7 +54,7 @@ Any change to `spec.py`, `kit.py` or `mesh.py` after approval makes the approval
 
 **Garments are at an early stage:** expect glitches, tell the user about every defect you see in the renders instead of hiding it, and report tool problems as issues or fix them in a pull request.
 
-**Garments:** `new → check → draw --quick → crop → build --force → posetest → fixes → draw → approval → build → posetest → render`. Read the manual's «Одежда» / "Clothing" section first: body landmarks, layers and gaps, density near joints, binding, spring-bone dynamics, the rules learned in practice (sleeve not ending at the elbow, belt on body weights, skirt dynamics from the hip line, overlays with `over=[…]`).
+**Garments:** `new → check → draw --quick → crop → build --force → posetest → render --inspect <parts> → fixes → draw → approval → build → posetest → render`. Look at every part with fine detail through `render --inspect` (light material, light from all sides): a dark palette hides crumpled edges and intersections. Read the manual's «Одежда» / "Clothing" section first: body landmarks, layers and gaps, density near joints, binding, spring-bone dynamics, the rules learned in practice (sleeve not ending at the elbow, belt on body weights, skirt dynamics from the hip line, overlays with `over=[…]`).
 
 ## 5. Improving the tool
 

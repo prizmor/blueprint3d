@@ -89,7 +89,9 @@
 | `<NAME>.blend` | Сцена: детали как объекты (внутренние детали в коллекции `internal`), материалы по отделке; одежда: арматура с костями с пружиной, одежда со скиннингом, `Body_masked` |
 | `<NAME>.fbx` | Оси Unity (вперёд −Z, вверх Y), масштаб по единицам, без концевых костей (leaf bones); у одежды включены арматура и `Body_masked` |
 | `<NAME>.glb` | Бинарный glTF, настройки экспортёра Blender по умолчанию |
-| `<NAME>_atlas.png` | Цветной атлас квадовых деталей (2048 px; цвета островов, узоры, отступ 10 px + расширение краёв) |
+| `<NAME>_atlas.png` | Цветной атлас квадовых деталей (`Model.atlas_px`, по умолчанию 2048 px; цвета островов, узоры, отступ 10 px + расширение краёв) |
+| `<NAME>_normal.png` | Карта нормалей квадовых деталей (касательное пространство OpenGL Y+, та же раскладка, что у атласа), запечена из складок режима `normal`; только если такие складки есть |
+| `<NAME>_foldmask.png` | Маска складок для художника (серая, яркость — сила складки), из складок режима `mask` |
 | `render_*.png` | Проверочные рендеры (Workbench): виды, перспективы, каркасы |
 | `manifest.json` | Промежуточный: что было передано в Blender (см. ниже) |
 | `blender.log` | stdout + stderr Blender последнего запуска |
@@ -144,7 +146,7 @@
 
 ### `out/render/render.json` (одежда)
 
-`{pose, renders: [png names], spec_hash, draft}`. Кадры: `<pose>_toon`, `<pose>_toon_back` и без `--hero-only` — `<pose>_toon_side`, `rest_toon`, `<pose>_matte`, `<pose>_wire`.
+`{pose, renders: [png names], spec_hash, draft}` (с `--inspect` пишутся только шесть `inspect_*.png`, без `render.json`). Кадры: `<pose>_toon`, `<pose>_toon_back` и без `--hero-only` — `<pose>_toon_side`, `rest_toon`, `<pose>_matte`, `<pose>_wire`.
 
 ## Результат проверки поз (`out/posetest/`)
 
@@ -155,8 +157,8 @@
 | `poses`, `parts` | что проверялось |
 | `thresholds` | `{body, layer, extreme, extreme_poses}` мм |
 | `failed` | true, если хоть одна строка превышает свой порог |
-| `worst_body`, `worst_layer`, `worst_collider` | наибольшие глубины, мм |
-| `rows` | `[{pose, part, kind: body|layer|collider, other, depth, count, where, point, rest}]` — наибольшая глубина на позу/деталь/вид; `where` — ближайший ориентир |
+| `worst_body`, `worst_layer`, `worst_collider`, `worst_skin`, `worst_stretch`, `worst_compress` | наибольшие глубины, мм |
+| `rows` | `[{pose, part, kind: body|layer|collider|skin|stretch|compress, other, depth, count, where, point, rest}]` — наибольшая глубина на позу/деталь/вид; `where` — ближайший ориентир |
 | `renders` | `{name: file}` |
 | `spec_hash` | хеш проверенной спецификации |
 

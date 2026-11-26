@@ -278,14 +278,22 @@ def cmd_posetest(obj, args):
         if k not in PT.POSES:
             sys.exit(f"нет позы {k}; есть: {', '.join(PT.POSES)}")
     rows, summary, rig = PT.run(model, poses)
+    limit_ = PT.limit
     out = os.path.abspath(args.out) if args.out else os.path.join(obj, "out", "posetest")
     os.makedirs(out, exist_ok=True)
-    kinds = {"body": "тело", "layer": "слой", "collider": "коллайдер"}
+    kinds = {"body": "тело", "layer": "слой", "collider": "коллайдер", "stretch": "растяжение", "compress": "сжатие",
+             "skin": "кожа в теле"}
     print(f"{'поза':14s} {'деталь':14s} {'вид':10s} {'мм':>6s} {'вершин':>6s}  место")
     for r in rows:
+        if r["kind"] in ("stretch", "compress"):
+            if r["depth"] <= limit_(r["pose"], r["kind"], r["where"]) * 0.8:
+                continue
+            flag = "!" if r["depth"] > limit_(r["pose"], r["kind"], r["where"]) else " "
+            print(f"{flag}{r['pose']:13s} {r['part']:14s} {kinds[r['kind']]:10s} {r['depth'] * 100:5.0f}% {r['count']:6d}  {r['where']}")
+            continue
         if r["depth"] < args.show and r["kind"] != "collider":
             continue
-        flag = "!" if r["kind"] != "collider" and r["depth"] > PT.limit(r["pose"], r["kind"]) else " "
+        flag = "!" if r["kind"] not in ("collider", "skin") and r["depth"] > PT.limit(r["pose"], r["kind"], r["where"]) else " "
         other = f" ({r['other']})" if r["other"] else ""
         print(f"{flag}{r['pose']:13s} {r['part']:14s} {kinds[r['kind']]:10s} {r['depth']:6.1f} {r['count']:6d}  {r['where']}{other}")
     renders = {}
@@ -293,7 +301,7 @@ def cmd_posetest(obj, args):
     if blend and not args.no_render:
         shots = [dict(name=f"pose_{k}", pose=PT.bone_matrices(rig, k), mode="solid", dir=(0.6, -1, 0.15), res=(900, 1300))
                  for k in poses]
-        worst = [r for r in rows if r["kind"] != "collider" and r["point"]][:4]
+        worst = [r for r in rows if r["kind"] not in ("collider", "skin") and r["point"]][:4]
         cx = model.body.center_x(model.body.lm["waist"])
         for n, r in enumerate(worst):
             p = r["point"]
@@ -311,7 +319,9 @@ def cmd_posetest(obj, args):
     print(f"поз {len(poses)}, деталей {len(summary['parts'])}; худшее: тело {summary['worst_body']:.1f} мм "
           f"(порог {PT.PEN_BODY:g}), слои {summary['worst_layer']:.1f} мм (порог {PT.PEN_LAYER:g}; в крайних позах "
           f"{', '.join(PT.EXTREME)} — {PT.PEN_EXTREME:g}), "
-          f"коллайдеры отодвигают ткань до {summary['worst_collider']:.0f} мм  ({time.time() - t:.0f} с)")
+          f"коллайдеры отодвигают ткань до {summary['worst_collider']:.0f} мм; растяжение до {summary['worst_stretch'] * 100:.0f} % "
+          f"(порог {PT.STRETCH_MAX * 100:.0f}, в крайних позах {PT.STRETCH_EXTREME * 100:.0f}), сжатие до "
+          f"{summary['worst_compress'] * 100:.0f} % (порог {PT.COMPRESS_MAX * 100:.0f})  ({time.time() - t:.0f} с)")
     print("posetest пройден" if not summary["failed"] else f"posetest НЕ пройден: строк выше порога {summary['failed']}")
     print(out)
     sys.exit(1 if summary["failed"] else 0)
@@ -383,6 +393,21 @@ def cmd_render_garment(obj, args, blend):
     rig = Rig(model)
     out = os.path.abspath(args.out) if args.out else os.path.join(obj, "out", "render")
     pose = args.pose or "hero"
+    if getattr(args, "inspect", ""):
+        # осмотр формы деталей: светлый материал, свет со всех сторон, шесть ракурсов, поза покоя (или --pose)
+        parts = [k.strip() for k in args.inspect.split(",") if k.strip()]
+        keys = {p.key for p in model.parts}
+        miss = [k for k in parts if k not in keys]
+        if miss:
+            sys.exit("нет деталей: " + ", ".join(miss) + "; есть: " + ", ".join(sorted(keys)))
+        M = PT.bone_matrices(rig, args.pose) if args.pose else {}
+        views = dict(front=(0.7, -1, 0.6), back=(-0.7, 1, 0.5), left=(1, 0, 0.2), right=(-1, 0, 0.2), top=(0.3, -0.4, 1),
+                     bottom=(0.3, -0.4, -1))
+        shots = [dict(name=f"inspect_{v}", pose=M, mode="inspect", dir=d, res=(1100, 1000), parts=parts)
+                 for v, d in views.items()]
+        _run_pose(blend, shots, out)
+        print(f"осмотр деталей {', '.join(parts)} (6 ракурсов): {out}  ({time.time() - t:.0f} с)")
+        return
     M = PT.bone_matrices(rig, pose)
     shots = [dict(name=f"{pose}_toon", pose=M, mode="toon", dir=(0.55, -1, 0.12), res=(1400, 1900)),
              dict(name=f"{pose}_toon_back", pose=M, mode="toon", dir=(-0.6, 1, 0.15), res=(1400, 1900))]
@@ -644,6 +669,8 @@ def main():
     s.add_argument("--model", default="", help="другой .blend (например, черновая сборка)")
     s.add_argument("--out", default="", help="папка результата")
     s.add_argument("--pose", default="", help="одежда: поза показа (по умолчанию hero), см. posetest.POSES")
+    s.add_argument("--inspect", default="", help="одежда: осмотр формы деталей (ключи через запятую) — светлый материал, "
+                                                 "свет со всех сторон, шесть ракурсов")
     add("status", "состояние апрува")
     s = add("posetest", "одежда в наборе поз: проникновения и рендеры худших случаев")
     s.add_argument("--poses", nargs="*", default=[], help="только эти позы")

@@ -147,6 +147,8 @@ class QuadMesh:
         self.vside = np.zeros(0, int)          # 0 — наружный слой, 1 — внутренний
         self.sharp = np.zeros((0, 2), int)     # острые рёбра (пары вершин)
         self.patches = []
+        self.gid = []                          # лоскут -> (nu, nv) номера вершин меша для точек его сетки
+        self.patch_uv = []                     # лоскут -> (U, V): мм развёртки для индексов сетки; None — нет связи
         self.thickness = 0.0
         self.two_sided = False                 # один слой без толщины: материал двусторонний
         self._brep = None
@@ -159,12 +161,15 @@ class QuadMesh:
         m = QuadMesh()
         m.patches = list(patches)
         V, F, UV, fi, vp, vuv, border = [], [], [], [], [], [], []
-        base = 0
+        base, bases = 0, []
         for k, P in enumerate(m.patches):
             nu, nv = P.G.shape[:2]
             U, Vv = P.lengths()
             s = P.uv_scale
-            m.islands.append(dict(name=P.name or f"p{k}", w=float(U[-1] * s), h=float(Vv[-1] * s), tag=OUTER, scale=s))
+            m.islands.append(dict(name=P.name or f"p{k}", w=float(U[-1] * s), h=float(Vv[-1] * s), tag=OUTER, scale=s,
+                                  patch=k))
+            m.patch_uv.append((U, Vv))
+            bases.append((base, nu, nv))
             V.append(P.G.reshape(-1, 3))
             vp.append(np.full(nu * nv, k))
             uu = np.arange(nu) / (nu if P.closed_u else max(nu - 1, 1))
@@ -200,8 +205,18 @@ class QuadMesh:
         m.vside = np.zeros(len(m.V), int)
         if border:
             m.sharp = np.vstack(border)
-        m._weld(weld)
+        remap = m._weld(weld)
+        m.gid = [remap[b + np.arange(nu * nv)].reshape(nu, nv) for b, nu, nv in bases]
         return m
+
+    def sync_patches(self):
+        """Сетки лоскутов -> по текущим вершинам меша (после смещения складками или деформеров): B-rep для
+        чертежа, отклонение и запекание карт идут по той же форме, что и меш."""
+        for k, P in enumerate(self.patches):
+            if k < len(self.gid) and self.gid[k] is not None and self.gid[k].shape == P.G.shape[:2]:
+                P.G = self.V[self.gid[k]].copy()
+        self._brep = None
+        return self
 
     def _weld(self, tol):
         from scipy.spatial import cKDTree
@@ -243,6 +258,7 @@ class QuadMesh:
         ok = np.array(ok, int)
         self.F, self.UV = F[ok], self.UV[ok]
         self.face_island, self.face_tag = self.face_island[ok], self.face_tag[ok]
+        return remap
 
     # ------------------------------------------------------------ геометрия
     def face_normals(self):
@@ -303,7 +319,7 @@ class QuadMesh:
                 UVi[k, 3] = UVi[k, 2]
         ni = len(self.islands)
         isl_in = [dict(name=i["name"] + "_in", w=i["w"] * inner_uv, h=i["h"] * inner_uv, tag=INNER,
-                       scale=i["scale"] * inner_uv) for i in self.islands]
+                       scale=i["scale"] * inner_uv, patch=i.get("patch")) for i in self.islands]
         Fr = np.array([[b, a, a + n0, b + n0] for a, b in rim], int).reshape(-1, 4)
         Lr = np.array([np.linalg.norm(self.V[a] - self.V[b]) for a, b in rim]) if rim else np.zeros(0)
         h = max(t, 2.0)                       # торцы делят один маленький остров (накладываются)
@@ -335,7 +351,10 @@ class QuadMesh:
         m.UV = np.vstack([self.UV, other.UV])
         m.face_island = np.concatenate([self.face_island, other.face_island + ni])
         m.face_tag = np.concatenate([self.face_tag, other.face_tag])
-        m.islands = self.islands + other.islands
+        m.islands = self.islands + [dict(i, patch=None if i.get("patch") is None else i["patch"] + npch)
+                                    for i in other.islands]
+        m.gid = list(self.gid) + [None if g is None else g + n for g in other.gid]
+        m.patch_uv = list(self.patch_uv) + list(other.patch_uv)
         m.vpatch = np.concatenate([self.vpatch, other.vpatch + npch])
         m.vuv = np.vstack([self.vuv, other.vuv])
         m.vside = np.concatenate([self.vside, other.vside])
@@ -365,6 +384,8 @@ class QuadMesh:
             UV[k, :n] = UV[k, :n][::-1]
         m.F, m.UV = F, UV
         m.patches = [Patch(P.G[::-1], P.closed_u, P.closed_v, P.name, P.uv_scale) for P in m.patches]
+        m.gid = [None if g is None else g[::-1] for g in self.gid]
+        m.patch_uv = [None] * len(self.patch_uv)          # развёртка зеркальной детали идёт против индексов сетки
         return m
 
     # ------------------------------------------------------------ B-rep, отклонение, габариты
@@ -440,6 +461,39 @@ class QuadMesh:
                 r = e3[m][ok] / e2[m][ok] * isl["scale"]
                 out[isl["name"]] = (float(r.min()), float(r.max()))
         return out
+
+
+def refine_patch(P, u_at=None, v_at=None):
+    """Тот же лоскут с добавленными рядами: u_at / v_at — дробные индексы новых точек сетки (между
+    существующими). Старые точки остаются на месте, новые лежат на кубическом сплайне через сетку,
+    поэтому форма не меняется, а квады у складки мельче. Добавление рядов по v меняет кромки u=0 и u=−1,
+    по u — кромки v=0 и v=−1: сгущать можно только по направлению, кромки которого ни с чем не сварены."""
+    from scipy.interpolate import make_interp_spline
+
+    def along(G, axis, extra, closed):
+        if extra is None or not len(extra):
+            return G
+        n = G.shape[axis]
+        idx = np.sort(np.unique(np.concatenate([np.arange(n, dtype=float), np.asarray(extra, float)])))
+        if closed:
+            W = np.concatenate([G, np.take(G, [0], axis=axis)], axis=axis)
+            sp = make_interp_spline(np.arange(n + 1, dtype=float), W, k=3, axis=axis, bc_type="periodic")
+            idx = idx[idx < n]
+        else:
+            k = 3 if n >= 4 else 1
+            sp = make_interp_spline(np.arange(n, dtype=float), G, k=k, axis=axis)
+            idx = idx[idx <= n - 1]
+        out = sp(idx)
+        base = np.isclose(idx, np.round(idx))                  # исходные точки — без погрешности сплайна
+        sl = [slice(None)] * 3
+        sl[axis] = np.nonzero(base)[0]
+        src = [slice(None)] * 3
+        src[axis] = np.round(idx[base]).astype(int)
+        out[tuple(sl)] = G[tuple(src)]
+        return out
+    G = along(np.asarray(P.G, float), 1, v_at, P.closed_v)
+    G = along(G, 0, u_at, P.closed_u)
+    return Patch(G, P.closed_u, P.closed_v, P.name, P.uv_scale)
 
 
 # ================================================================== сборка деталей из сеток

@@ -3,8 +3,10 @@
 показ в toon-стиле (EEVEE: ступени света через Shader to RGB, обводка вывернутой оболочкой).
 
 shots.json: {"shots": [{"name", "pose": {кость: 16 чисел 4×4 в координатах персонажа, мм}, "mode":
-"solid" | "wire" | "toon" | "matte", "dir": [x, y, z] (откуда смотрит камера, оси Blender), "target": [x, y, z] мм
-в координатах персонажа или null (вся фигура), "radius": мм, "res": [w, h]}]}"""
+"solid" | "wire" | "toon" | "matte" | "inspect", "dir": [x, y, z] (откуда смотрит камера, оси Blender), "target":
+[x, y, z] мм в координатах персонажа или null (вся фигура), "radius": мм, "res": [w, h], "parts": [ключи деталей]
+или null (все)}]}. "inspect" — осмотр формы: светлый матовый материал с картой нормалей вещи и свет со всех сторон,
+включая снизу (тёмная палитра прячет вмятины, швы и щели); parts — показать только эти детали."""
 import bpy, json, math, os, sys
 import numpy as np
 from mathutils import Vector, Matrix
@@ -50,7 +52,7 @@ def apply_pose(pose):
 def bounds_posed():
     dg = bpy.context.evaluated_depsgraph_get()
     lo, hi = Vector((1e9,) * 3), Vector((-1e9,) * 3)
-    for o in meshes:
+    for o in [o for o in meshes if not o.hide_render]:
         e = o.evaluated_get(dg)
         for c in e.bound_box:
             w = e.matrix_world @ Vector(c)
@@ -236,18 +238,88 @@ def setup_matte():
     sc.world = bpy.data.worlds["matte_world"]
 
 
+_inspect = {}
+
+
+def inspect_material(src):
+    """Светлый матовый материал осмотра; карта нормалей — та же, что у вещи. Пластик и металл — тёмные, чтобы
+    шнурки, люверсы и фурнитура отличались от основы."""
+    key = src.name if src else "-"
+    if key in _inspect:
+        return _inspect[key]
+    m = bpy.data.materials.new("BP3D_inspect")
+    m.use_nodes = True
+    nt = m.node_tree
+    bs = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    dark = src is not None and src.get("bp3d_finish") in ("plastic", "metal", "chrome")
+    bs.inputs["Base Color"].default_value = (0.09, 0.09, 0.1, 1) if dark else (0.66, 0.64, 0.6, 1)
+    bs.inputs["Roughness"].default_value = 0.65
+    if src is not None and src.use_nodes:
+        img = next((n.image for n in src.node_tree.nodes if n.type == "TEX_IMAGE" and n.image
+                    and "normal" in n.image.name.lower()), None)
+        if img is not None:
+            t = nt.nodes.new("ShaderNodeTexImage")
+            t.image = img
+            nm = nt.nodes.new("ShaderNodeNormalMap")
+            nt.links.new(t.outputs["Color"], nm.inputs["Color"])
+            nt.links.new(nm.outputs["Normal"], bs.inputs["Normal"])
+    _inspect[key] = m
+    return m
+
+
+def setup_inspect():
+    C.set_engine(sc, "BLENDER_EEVEE_NEXT", "BLENDER_EEVEE")
+    try:
+        sc.view_settings.view_transform = "Standard"
+    except TypeError:
+        pass
+    if not bpy.data.worlds.get("inspect_world"):
+        w = bpy.data.worlds.new("inspect_world")
+        w.use_nodes = True
+        bg = next(n for n in w.node_tree.nodes if n.type == "BACKGROUND")
+        bg.inputs["Color"].default_value = (0.3, 0.31, 0.33, 1)
+        bg.inputs["Strength"].default_value = 1.0
+        for i, (d, e) in enumerate((((1, -1, 1.2), 3.0), ((-1, 0.5, 0.8), 1.2), ((0, 1, 0.3), 0.8), ((0.3, -0.4, -1.0), 1.6))):
+            L = bpy.data.objects.new(f"inspect_sun{i}", bpy.data.lights.new(f"inspect_sun{i}", "SUN"))
+            L.data.energy = e
+            L.rotation_euler = (-Vector(d)).to_track_quat("-Z", "Y").to_euler()
+            sc.collection.objects.link(L)
+            L["bp3d_inspect"] = True
+    sc.world = bpy.data.worlds["inspect_world"]
+    for o in sc.objects:                                 # свет осмотра — только в этом режиме
+        if o.type == "LIGHT":
+            o.hide_render = not o.get("bp3d_inspect")
+
+
+def end_inspect():
+    for o in sc.objects:
+        if o.type == "LIGHT":
+            o.hide_render = bool(o.get("bp3d_inspect"))
+
+
 renders = {}
-order = {"solid": 0, "wire": 1, "matte": 2, "toon": 3}               # toon меняет материалы — рендерится последним
+order = {"solid": 0, "wire": 1, "matte": 2, "inspect": 3, "toon": 4}  # toon меняет материалы — рендерится последним
 for sh in sorted(cfg["shots"], key=lambda s: order[s.get("mode", "solid")]):
     mode = sh.get("mode", "solid")
     apply_pose(sh.get("pose") or {})
-    wires = []
+    wires, saved, shown = [], {}, {}
+    if sh.get("parts"):                                  # только эти детали (и без тела, если его не просили)
+        want = set(sh["parts"])
+        for o in [o for o in sc.objects if o.type == "MESH"]:
+            shown[o.name] = o.hide_render
+            o.hide_render = o.name.split(".")[0] not in want
     if mode in ("solid", "wire"):
         setup_solid(mode == "wire")
         if mode == "wire":
             wires = C.wire_overlay([o for o in meshes if o.name != "Body_masked"], thickness=0.0007)
     elif mode == "matte":
         setup_matte()
+    elif mode == "inspect":
+        setup_inspect()
+        for o in meshes:
+            saved[o.name] = [s.material for s in o.material_slots]
+            for s in o.material_slots:
+                s.material = inspect_material(s.material)
     else:
         setup_toon()
     frame(sh)
@@ -258,6 +330,15 @@ for sh in sorted(cfg["shots"], key=lambda s: order[s.get("mode", "solid")]):
     renders[sh["name"]] = path
     for w in wires:
         bpy.data.objects.remove(w)
+    for o in meshes:                                     # вернуть материалы и видимость после осмотра
+        if o.name in saved:
+            for s, m in zip(o.material_slots, saved[o.name]):
+                s.material = m
+    if mode == "inspect":
+        end_inspect()
+    for o in sc.objects:
+        if o.name in shown:
+            o.hide_render = shown[o.name]
     print("BP3D_POSE", sh["name"])
 json.dump(renders, open(os.path.join(OUT, "renders.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 print("BP3D_DONE", len(renders))
