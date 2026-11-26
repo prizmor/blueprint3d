@@ -9,6 +9,7 @@ Every pull request that changes the tool adds a line under **Unreleased** (CI ch
 ### Added
 - Developer documentation: documentation map, architecture, module reference, CLI reference, file formats, development guide (English and Russian).
 - Documentation policy: code changes must come with docs and a changelog entry; enforced by the `docs` CI job.
+- Code of Conduct (Contributor Covenant 2.1).
 
 ### Changed
 - CI: `actions/checkout` and `actions/setup-python` v7 (Node 24).

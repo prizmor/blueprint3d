@@ -33,7 +33,7 @@ By sending a pull request you agree that your contribution is licensed under the
 
 ## Conduct
 
-Be respectful and constructive. Criticise code, not people. Harassment of any kind is not tolerated; the maintainer may close discussions and block participants who ignore this.
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md) (Contributor Covenant 2.1). In short: be respectful and constructive, criticise code, not people. Reports go to the maintainer privately through GitHub (Security → Report a vulnerability).
 
 ---
 
@@ -52,5 +52,7 @@ Be respectful and constructive. Criticise code, not people. Harassment of any ki
 Каждый PR вливается только после апрува мейнтейнера и зелёного CI. Пушить в `main` больше никто не может.
 
 Правка `kit.py`, `mesh.py`, `body.py`, `garment.py` или `rig.py` меняет хеш апрува объектов пользователей — напишите об этом в PR. Не коммитить `out/`, `venv/`, `.python/`, `.cache/`, `.mpfb/`, личные пути и имена. Тела сохранять через `bl_common.save_clean()`.
+
+Все участники соблюдают [правила поведения](CODE_OF_CONDUCT.md) (Contributor Covenant 2.1): уважительно и по делу, критикуется код, а не люди. Жалобы — мейнтейнеру приватно через GitHub (Security → Report a vulnerability).
 
 Отправляя PR, вы соглашаетесь, что ваш вклад распространяется по [Apache License 2.0](LICENSE), а файлы в `examples/` и `bodies/` — по [CC0 1.0](examples/LICENSE).
