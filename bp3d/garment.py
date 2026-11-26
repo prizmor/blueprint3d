@@ -524,8 +524,11 @@ class Outfit:
         # Динамика подола по умолчанию: цепочки сидят на тазе и начинаются у линии бёдер — выше юбка идёт
         # за телом (пояс гнётся вместе с талией), ниже — за костями с пружиной. Радиус столкновения большой:
         # цепочка между бёдрами ложится на них, а не проваливается.
+        # Коллайдеры подола — только ноги и таз: капсула туловища при наклоне вперёд приходит сверху и
+        # толкала бы подол вверх, в жилет.
         pc.dyn_defaults = dict(parent="hips", v0=float(np.clip((zw - lm["hips"]) * 0.4 / length, 0.08, 0.5)),
-                               radius=30.0, chains=12, bones=4, follow=0.9)
+                               radius=30.0, chains=12, bones=4, follow=0.9,
+                               colliders=("thigh_L", "thigh_R", "shin_L", "shin_R", "pelvis"))
         return pc
 
     # ------------------------------------------------------------ низ: брюки, шорты, леггинсы
@@ -619,22 +622,84 @@ class Outfit:
         p = self._outward(Patch(G, closed_v=closed, name=name))
         return Piece([p], t, dict(edge=p.G[-1] if p.G.shape[0] else None, outer=G[-1]), name=name)
 
-    def collar(self, top, kind="stand", height=28.0, width=None, t=1.2, name="collar"):
-        """Воротник по вырезу лифа: "stand" — стойка, "turndown" — отложной (стойка + отлёт шириной width),
+    def _stand(self, loop, closed, height, t, name, front_drop=0.35, rows=4, stand_off=4.5):
+        """Воротник-стойка: ровное кольцо вокруг оси шеи. Низ лежит на вырезе, верх — гладкая плоская кромка;
+        радиус идёт от выреза к шее с постоянным зазором, спереди стойка ниже (front_drop — доля высоты),
+        чтобы не упираться в подбородок. Форма считается по кольцам шеи, а не выталкиванием точек из тела:
+        выталкивание по точкам мяло стойку и вытягивало её вверх под подбородком."""
+        B = self.B
+        L = smooth_line(loop, closed, step=10.0)
+        a0, b0 = B.joint("neck"), B.joint("head")
+        ax = (b0 - a0) / np.linalg.norm(b0 - a0)
+        ex = np.array([1.0, 0.0, 0.0]) - ax * ax[0]
+        ex /= np.linalg.norm(ex)
+        ey = np.cross(ax, ex)
+        rel = L - a0
+        h0 = rel @ ax
+        rad = rel - h0[:, None] * ax
+        th = np.arctan2(rad @ ey, rad @ ex)
+        r0 = np.linalg.norm(rad, axis=1)
+
+        def sm(v, sigma):
+            if closed:
+                return _smooth_circular(v, sigma)
+            k = int(math.ceil(sigma * 3))
+            w = np.exp(-0.5 * (np.arange(-k, k + 1) / sigma) ** 2)
+            return np.convolve(np.pad(v, k, mode="edge"), w / w.sum(), mode="valid")
+        fw = ((1 - np.cos(th)) / 2) ** 1.5                           # 0 — спина, 1 — середина переда
+        hk = height * (1 - front_drop * fw)
+        # верхняя кромка — плоская: высота как первая гармоника угла
+        A = np.stack([np.ones_like(th), np.cos(th), np.sin(th)], axis=1)
+        top_h = A @ np.linalg.lstsq(A, h0 + hk, rcond=None)[0]
+        na = 48
+        hs = np.linspace(h0.min() - 6.0, top_h.max() + 6.0, 7)
+        R = np.array([B.ring(a0 + ax * h, ax, ex, na, ("torso", "head"), "far", 1.0, 2.0)[1] for h in hs])
+
+        def r_body(theta, h):
+            fa = (theta % (2 * math.pi)) / (2 * math.pi) * na
+            i0 = np.floor(fa).astype(int) % na
+            fr = fa - np.floor(fa)
+            fh = np.clip((h - hs[0]) / (hs[1] - hs[0]), 0, len(hs) - 1.001)
+            j0 = np.floor(fh).astype(int)
+            fj = fh - j0
+            ra = R[j0, i0] * (1 - fr) + R[j0, (i0 + 1) % na] * fr
+            rb = R[j0 + 1, i0] * (1 - fr) + R[j0 + 1, (i0 + 1) % na] * fr
+            return ra * (1 - fj) + rb * fj
+        gapc = LAYER_GAP[1] + t + stand_off                     # стойка отстоит от шеи, а не облегает её
+        rings = []
+        for i in range(rows + 1):
+            f = i / rows
+            h = (h0 - 4.0) + (top_h - h0 + 4.0) * f               # низ стойки перекрывает кромку выреза
+            need = r_body(th, h) + gapc
+            r = (r0 + 2.2) + (need - (r0 + 2.2)) * float(smoothstep(min(1.0, f / 0.6)))
+            r = sm(np.maximum(r, need), 1.5)
+            rings.append(a0 + ax[None] * h[:, None] + r[:, None] * (np.cos(th)[:, None] * ex + np.sin(th)[:, None] * ey))
+        G = np.stack(rings, axis=0)
+        cl = np.full(G.shape[:2], -1e9)
+        cl[:2] = LAYER_GAP[1] + t                                   # только низ: у основания шеи плечо поднимается круто
+        G = B.push_out(G, cl, cells=False)
+        p = self._outward(Patch(G, closed_v=closed, name=name))
+        return Piece([p], t, dict(outer=rings[-1]), name=name)
+
+    def collar(self, top, kind="stand", height=28.0, width=None, t=1.2, name="collar", front_drop=0.35):
+        """Воротник по вырезу лифа: "stand" — стойка (ровное кольцо вокруг шеи; front_drop — насколько она
+        ниже спереди, в долях высоты), "turndown" — отложной (стойка + отлёт шириной width),
         "flat" — плоский (лежит на плечах), "ruffle" — оборка по вырезу."""
         loop, closed = top.edges["neck"], top.edges.get("neck_closed", True)
+        if kind == "stand":
+            pc = self._stand(loop, closed, height, t, name, front_drop)
+            pc.layer = getattr(top, "layer", 1) + 1
+            return pc
         loop = smooth_line(loop, closed, step=11.0)
         w = width or height * 1.4
         prof = dict(
-            stand=[(0.8, -2.0), (0.6, height * 0.33), (0.2, height * 0.67), (-0.6, height)],
             turndown=[(0.8, -2.0), (-1.5, height * 0.5), (-2.0, height * 0.85), (1.5, height * 1.0),
                       (w * 0.5, height * 0.62), (w * 0.85, height * 0.1), (w, -height * 0.3)],
             flat=[(0.0, 1.5), (w * 0.35, 3.5), (w * 0.7, 2.5), (w, 0.5)],
             ruffle=[(0.0, 1.0), (w * 0.3, 5.0), (w * 0.65, 6.0), (w, 3.0)])[kind]
         fit = float(self.B.closest(loop)["dist"].max()) + t + 0.8        # воротник лежит поверх лифа, не в нём
         pc = self.band(loop, prof, closed=closed, t=t, name=name, wave=(w * 0.16, max(6, len(loop) // 5)) if kind == "ruffle" else None,
-                       taper=0 if closed else 5, fit=LAYER_GAP[1] + t if kind == "stand" else fit,
-                       fit_from=1 if kind == "stand" else len(prof) // 2)      # стойка садится по шее, отлёт — поверх лифа
+                       taper=0 if closed else 5, fit=fit, fit_from=len(prof) // 2)
         pc.layer = getattr(top, "layer", 1) + 1
         return pc
 
@@ -736,7 +801,15 @@ class Outfit:
         G = np.stack(rings, axis=1)
         p = self._outward(Patch(G, closed_u=True, name=name))
         mid = G[:, rows // 2]
-        pc = Piece([p], thick, dict(ring=mid, front=mid[int(mid[:, 0].argmin())]), name=name)
+        i = int(mid[:, 0].argmin())
+        up = G[i, 0] - G[i, -1]                                   # вдоль пояса снизу вверх (с его наклоном)
+        up /= np.linalg.norm(up)
+        tg = mid[(i + 1) % nu] - mid[i - 1]
+        nrm = np.cross(tg, up)
+        nrm /= np.linalg.norm(nrm)
+        if nrm[0] > 0:                                             # наружу: перёд смотрит в −X
+            nrm = -nrm
+        pc = Piece([p], thick, dict(ring=mid, front=mid[i], front_normal=nrm, front_up=up), name=name)
         pc.layer = layer
         return pc
 
@@ -746,15 +819,23 @@ class Outfit:
         front = ring[ring[:, 0] < self.B.center_x(self.z(z))]
         return front[np.abs(front[:, 1] - y).argmin()].copy()
 
-    def buckle(self, center, w=44.0, h=36.0, d=5.0, bar=5.0):
-        """Пряжка-рамка — жёсткая деталь (тело build123d, mesh="cad"): рамка w × h толщиной d, перёд в −X.
-        Привязывается к одной кости: O.M.add(..., bind="hips")."""
+    def buckle(self, center, w=44.0, h=36.0, d=5.0, bar=5.0, normal=(-1, 0, 0), up=(0, 0, 1)):
+        """Пряжка-рамка — жёсткая деталь (тело build123d, mesh="cad"): рамка w × h толщиной d.
+        center — точка на наружной поверхности пояса, normal — наружу от пояса, up — вдоль пояса вверх:
+        пряжка ложится на пояс с его наклоном (belt.edges["front"], ["front_normal"], ["front_up"]),
+        а не стоит вертикально. Привязывается к одной кости: O.M.add(..., bind="hips")."""
+        from build123d import Location, Plane
         from .kit import box, cut
-        x, y, z = center
-        frame = cut(box(x - d, y - w / 2, z - h / 2, x + 1.0, y + w / 2, z + h / 2, r=3),
-                    box(x - d - 1, y - w / 2 + bar, z - h / 2 + bar, x + 2.0, y + w / 2 - bar, z + h / 2 - bar, r=1.5))
-        prong = box(x - d - 0.5, y - 1.6, z - h / 2 + 1, x - d + 2.0, y + 1.6, z + h / 2 - 1)
-        return frame + prong
+        frame = cut(box(-d, -w / 2, -h / 2, 1.0, w / 2, h / 2, r=3),
+                    box(-d - 1, -w / 2 + bar, -h / 2 + bar, 2.0, w / 2 - bar, h / 2 - bar, r=1.5))
+        prong = box(-d - 0.5, -1.6, -h / 2 + 1, -d + 2.0, 1.6, h / 2 - 1)
+        n = np.asarray(normal, float)
+        n /= np.linalg.norm(n)
+        u = np.asarray(up, float)
+        u = u - n * (u @ n)
+        u /= np.linalg.norm(u)
+        loc = Location(Plane(origin=tuple(float(c) for c in center), x_dir=tuple(-n), z_dir=tuple(u)))
+        return (frame + prong).moved(loc)
 
     def button(self, center, normal=(-1, 0, 0), r=7.0, h=3.0, name="button", n=12):
         """Пуговица — диск (тело вращения квадами) с осью по normal."""
@@ -866,11 +947,18 @@ class Outfit:
         return pc, tl
 
     # ------------------------------------------------------------ обувь
-    def shoe(self, side, shaft=0.9, layer=2, ease=2.5, t=2.0, sole=6.0, cols=20, name=None):
-        """Простая обувь — ботинок: одна труба от голенища (параметр ноги shaft; 0.9 — чуть выше щиколотки,
-        0.6 — сапог до середины голени) через изгиб у щиколотки до закрытого носка, с плоской подошвой.
-        Верх открыт (нога входит в ботинок), толщина t. Привязка — по весам ноги: щиколотка гнётся."""
+    def shoe(self, side, shaft=0.9, layer=2, ease=3.0, t=2.0, sole=10.0, welt=3.0, toe=0.30, toe_height=32.0,
+             cols=24, name=None):
+        """Обувь — ботинок или сапог на КОЛОДКЕ: форма стопы у обуви своя, фиксированная, а не обтяжка стопы
+        (обтяжка повторяла пальцы и свод). Голенище (от параметра ноги shaft: 0.9 — чуть выше щиколотки,
+        0.7 — до середины голени) и изгиб у щиколотки идут по ноге; от подъёма до носка — колодка:
+        гладкие сечения с плоским низом, ширина и высота — огибающая стопы плюс ease, носок закруглён на
+        последней доле длины toe, высота носка не меньше toe_height. Отдельным телом — подошва толщиной sole
+        с рантом welt (лоскут «<имя>_sole»: ему можно дать свой цвет узором kind="fill").
+        Подошва уходит ниже пола на sole мм: в игре корень персонажа поднимается на эту величину.
+        Верх открыт, толщина верха t. Привязка — по весам ноги: щиколотка гнётся."""
         from .body import plane_segments
+        from .mesh import _orient_like_first
         B = self.B
         name = name or f"shoe_{side}"
         limb = f"leg_{side}"
@@ -879,8 +967,9 @@ class Outfit:
         ank = B.joint(f"foot_{side}")
         sg = -1.0 if side == "L" else 1.0
         fv = B.V[(B.vreg == ["torso", "head", "arm_L", "arm_R", "leg_L", "leg_R"].index(limb)) & (B.V[:, 2] < ank[2] * 0.9)]
-        x_toe = float(fv[:, 0].min())
         off = self.gap(layer, t) + ease
+        x_tip = float(fv[:, 0].min()) - off - 2.0
+        zb = -2.5                                                   # низ верха: чуть ниже стопы, утоплен в подошву
         zp = float(ank[2] + 28.0)
         front = fv[np.abs(fv[:, 2] - min(ank[2] * 0.85, fv[:, 2].max())) < 12.0]
         pivot = np.array([float(front[:, 0].min()) - 44.0, float(np.median(fv[:, 1])), zp])     # перед подъёмом стопы
@@ -897,24 +986,76 @@ class Outfit:
             rings.append(ring_at(np.array([ank[0], ank[1], z]), np.array([0.0, 0.0, -1.0])))
         for ph in np.radians([22.5, 45, 67.5, 90]):                                            # изгиб: веер плоскостей
             rings.append(ring_at(pivot, np.array([-math.sin(ph), 0.0, -math.cos(ph)])))
-        xs = pivot[0] + (x_toe - pivot[0]) * spacing(7, [(1.0, 0.15, 1.5)])[1:]
-        for x in xs[:-1]:                                                                      # стопа до носка
-            rings.append(ring_at(np.array([x, pivot[1], 10.0]), np.array([-1.0, 0.0, 0.0])))
-        last = rings[-1]
-        c = last.mean(axis=0)
-        for k, dx in ((0.8, 0.5), (0.45, 0.9)):                                                # закруглить носок
-            q = c + (last - c) * k
-            q[:, 0] = last[:, 0] + (x_toe - off * 0.2 - last[:, 0].mean()) * dx
-            rings.append(q)
-        G = np.stack(rings, axis=1)
-        G = B.push_out(G, off - 0.2)
-        low = G[..., 2] < 7.0                                                                  # низ — плоская подошва
-        G[..., 2] = np.where(low, -sole, G[..., 2])
-        tip = G[:, -1].mean(axis=0)
-        tip[0] = x_toe - off                                                                   # полюс носка: веер треугольников
-        G = np.concatenate([G, np.repeat(tip[None, None, :], cols, axis=0)], axis=1)
+        G = B.push_out(np.stack(rings, axis=1), off - 0.2)
+        G[..., 2] = np.where(G[..., 2] < 7.0, zb, G[..., 2])                                   # низ пятки — плоский
+        nleg = G.shape[1]
+        # --- колодка: огибающая стопы по станциям от подъёма до носка
+        ss = spacing(9, [(1.0, 0.2, 1.6)])[1:]
+        xs = pivot[0] + (x_tip - pivot[0]) * ss
+        wb, hb, yc = [], [], []
+        for x in xs:
+            sl = fv[np.abs(fv[:, 0] - x) < 12.0]
+            if len(sl) < 4:
+                wb.append(wb[-1]); hb.append(hb[-1]); yc.append(yc[-1])
+                continue
+            yc.append(float((sl[:, 1].max() + sl[:, 1].min()) / 2))
+            wb.append(float((sl[:, 1].max() - sl[:, 1].min()) / 2))
+            hb.append(float(sl[:, 2].max()))
+        env = lambda v: np.convolve(np.pad(np.maximum.accumulate(np.array(v)[::-1])[::-1] * 0.5 + np.array(v) * 0.5, 2, mode="edge"),
+                                    np.ones(5) / 5, mode="valid")
+        wb, hb = np.maximum(env(wb), np.array(wb)), np.maximum(env(hb), np.array(hb))
+        yc = np.convolve(np.pad(np.array(yc), 2, mode="edge"), np.ones(5) / 5, mode="valid")
+        th = np.arange(cols) * 2 * math.pi / cols
+        dy, dz = sg * np.cos(th), -sg * np.sin(th)                    # те же углы, что у колец ноги
+        s0 = 1.0 - toe
+        last = []
+        for k, s in enumerate(ss):
+            tp = 0.0 if s <= s0 else (s - s0) / toe
+            w = (wb[k] + off) * math.sqrt(max(1.0 - tp ** 2.4, 0.0))
+            h = max(hb[k] + off, toe_height) * math.sqrt(max(1.0 - max(0.0, (tp - 0.35) / 0.65) ** 2.2, 0.0))
+            if w < 1.0 or h < 1.0:
+                continue
+            zc, hz = zb + (h - zb) / 2, (h - zb) / 2
+            n_top, n_bot = 2.6, 5.0                                 # верх округлый, низ почти плоский
+            ex_ = np.where(dz >= 0, n_top, n_bot)
+            r = (np.abs(dy / w) ** ex_ + np.abs(dz / hz) ** ex_) ** (-1.0 / ex_)
+            last.append(np.stack([np.full(cols, xs[k]), yc[k] + r * dy, zc + r * dz], axis=1))
+        Gl = np.stack(last, axis=1)
+        tip = np.array([x_tip, yc[-1], zb + min(hb[-1] + off, toe_height) * 0.3])
+        G = np.concatenate([G, Gl, np.repeat(tip[None, None, :], cols, axis=0)], axis=1)   # полюс носка
         tube = self._outward(Patch(G, closed_u=True, name=name))
-        m = QuadMesh.from_patches([tube])
-        pc = Piece(solid=m.solidify(t), edges=dict(top=tube.G[:, 0]), name=name)
+        upper = QuadMesh.from_patches([tube]).solidify(t)
+        # --- подошва: отдельное замкнутое тело под верхом, с рантом
+        low = tube.G.reshape(-1, 3)
+        low = low[low[:, 2] < 10.0]
+        x0, x1 = float(low[:, 0].max()) + welt, float(low[:, 0].min()) - welt
+        sx = x0 + (x1 - x0) * spacing(15, [(0.0, 0.12, 1.8), (1.0, 0.12, 1.8)])
+        zc, hz = (zb + 1.0 - sole) / 2, (zb + 1.0 + sole) / 2
+        sx = sx[1:-1]
+        mid, half = np.full(len(sx), np.nan), np.full(len(sx), np.nan)
+        for k, x in enumerate(sx):                                    # контур низа верха по станциям
+            sl = low[np.abs(low[:, 0] - x) < 14.0]
+            if len(sl) >= 3:
+                mid[k], half[k] = (sl[:, 1].max() + sl[:, 1].min()) / 2, (sl[:, 1].max() - sl[:, 1].min()) / 2
+        ok = np.isfinite(half)                                        # станции без точек — по соседним
+        mid, half = np.interp(sx[::-1], sx[ok][::-1], mid[ok][::-1])[::-1], np.interp(sx[::-1], sx[ok][::-1], half[ok][::-1])[::-1]
+        half = np.convolve(np.pad(half, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")
+        srings = []
+        for k, x in enumerate(sx):
+            e = min(abs(x - x0), abs(x - x1))                         # скругление пятки и носка подошвы в плане
+            hw = half[k] + welt
+            if e < 34.0:
+                hw = min(hw, math.sqrt(max(e * (2 * 34.0 - e), 0.0)) + 6.0)
+            r = (np.abs(dy / max(hw, 6.0)) ** 6.0 + np.abs(dz / hz) ** 6.0) ** (-1.0 / 6.0)
+            # точки кольца — равномерно по длине контура: у плоского сечения равные углы дают узкие квады на бортах
+            srings.append(resample_closed(np.stack([np.full(cols, x), mid[k] + r * dy, zc + r * dz], axis=1), cols))
+        c0, c1 = srings[0].mean(axis=0), srings[-1].mean(axis=0)
+        c0[0], c1[0] = x0, x1
+        Gs = np.stack([np.repeat(c0[None], cols, axis=0)] + srings + [np.repeat(c1[None], cols, axis=0)], axis=1)
+        sm_ = QuadMesh.from_patches([Patch(Gs, closed_u=True, name=name + "_sole")])
+        _orient_like_first(sm_)
+        _fix_outward(sm_)
+        pc = Piece(solid=upper.merged(sm_), edges=dict(top=tube.G[:, 0]), name=name)
         pc.layer, pc.limb = layer, limb
+        pc.ground = sole
         return pc

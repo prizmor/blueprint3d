@@ -22,6 +22,7 @@ PEN_LAYER = 4.0         # мм: то же между слоями одежды
 PEN_EXTREME = 12.0      # мм: порог для крайних поз (сгиб сустава больше 90°)
 EXTREME = ("sit", "squat", "elbows_bent")   # в них тело само входит в себя в складке (линейный скиннинг без
                                             # корректирующих форм), и одежда в складке повторяет это
+LATERAL = 0.75          # доля, на которую сустав цепочки подтягивается к смещению соседних цепочек (полотно)
 NEAR = 30.0             # мм: глубже этого точка уже «с другой стороны», а не протыкание
 
 
@@ -89,7 +90,7 @@ def solve(rig, pose):
     body, sk = rig.body, rig.skel
     M = body.pose_on(sk, pose)
     g = np.array([0.0, 0.0, -1.0])
-    press = []
+    press, solved = [], []
     for c in rig.chains:
         pr = c["params"]
         Mp = M[c["parent"]]
@@ -153,7 +154,43 @@ def solve(rig, pose):
                 q = p[-1] + v / max(np.linalg.norm(v), 1e-9) * L
             side = now
             p.append(q)
-        for i in range(K):
+        kin = np.array([(Mp @ np.append(J[i], 1))[:3] for i in range(K + 1)])     # без тяжести и коллайдеров
+        solved.append(dict(c=c, p=np.array(p), kin=kin, J=J, J0=J0, Rp=Rp, Rf=Rf))
+        press.append(worst)
+    # Полотно между цепочками: цепочка, которую коллайдер не тронул, не может провиснуть клином между
+    # двумя соседними, лёгшими на бёдра, — ткань тянет её за ними. Смещение сустава подтягивается к среднему
+    # смещению соседей по кольцу, если оно больше собственного; длины костей затем восстанавливаются.
+    groups = {}
+    for s in solved:
+        c = s["c"]
+        if c["count"] > 2:
+            groups.setdefault((c["part"], c["zone"], c["patch"]), []).append(s)
+    for grp in groups.values():
+        grp.sort(key=lambda s: s["c"]["index"])
+        if len(grp) != grp[0]["c"]["count"] or len({len(s["p"]) for s in grp}) != 1:
+            continue
+        P = np.array([s["p"] for s in grp])
+        D = P - np.array([s["kin"] for s in grp])
+        closed = grp[0]["c"]["closed"]
+        for _ in range(4):
+            if closed:
+                nb = (np.roll(D, 1, axis=0) + np.roll(D, -1, axis=0)) / 2
+            else:
+                Dp = np.concatenate([D[:1], D, D[-1:]], axis=0)
+                nb = (Dp[:-2] + Dp[2:]) / 2
+            more = np.linalg.norm(nb, axis=2, keepdims=True) > np.linalg.norm(D, axis=2, keepdims=True)
+            D = np.where(more, D + LATERAL * (nb - D), D)
+        P = np.array([s["kin"] for s in grp]) + D
+        for s, q in zip(grp, P):
+            q[0] = s["p"][0]
+            for i in range(1, len(q)):                    # длины костей
+                L = np.linalg.norm(s["J"][i] - s["J"][i - 1])
+                v = q[i] - q[i - 1]
+                q[i] = q[i - 1] + v / max(np.linalg.norm(v), 1e-9) * L
+            s["p"] = q
+    for s in solved:
+        c, p, J, J0, Rp, Rf = s["c"], s["p"], s["J"], s["J0"], s["Rp"], s["Rf"]
+        for i in range(len(p) - 1):
             d_rest = (J[i + 1] - J[i]) / np.linalg.norm(J[i + 1] - J[i])
             d_new = (p[i + 1] - p[i]) / np.linalg.norm(p[i + 1] - p[i])
             R = _shortest(Rp @ d_rest, d_new) @ Rp @ Rf
@@ -161,7 +198,6 @@ def solve(rig, pose):
             Mi[:3, :3] = R
             Mi[:3, 3] = p[i] - R @ J0[i]
             M[c["bones"][i]] = Mi
-        press.append(worst)
     return M, press
 
 

@@ -137,7 +137,7 @@ Axes: X — rearward from the frontmost point, Y — to the left, Z — up from 
 |---|---|
 | `mesh` | `"cad"` — CAD triangulation of the solid (default); `"quad"` — quad mesh. Set automatically if a `QuadMesh` is passed instead of a solid |
 | `color` | Colour: a name from `model.PALETTE`, `"#RRGGBB"` or `(r, g, b)`. Without a colour the part is grey according to its finish. The palette is a proposal; the user chooses the colour |
-| `pattern` | Pattern or list of patterns for a quad part, baked into the atlas by UV: `dict(kind="stripe", dir="v", pitch, width, color)`, `"check"` (`style="gingham"\|"checker"`), `"dots"` (`pitch`, `r`), `"trim"` — piping along the island edge (`edges=("v1",)`, `width`). `patch="name"` — only on patches whose names start with this |
+| `pattern` | Pattern or list of patterns for a quad part, baked into the atlas by UV: `dict(kind="stripe", dir="v", pitch, width, color)`, `"check"` (`style="gingham"\|"checker"`), `"dots"` (`pitch`, `r`), `"fill"` — the whole island in one colour (with `patch`: a sole, an insert), `"trim"` — piping along the island edge (`edges=("v1",)`, `width`). `patch="name"` — only on patches whose names start with this |
 | `bind` | Binding to the skeleton: `"auto"` — weights from the body; a role or bone name (`"hips"`) — a rigid part on a single bone |
 | `dynamics` | Spring bones: `"stiff"` (springy, holds its shape), `"soft"` (sags), `"rigid"`/`None` or a dictionary — see "Clothing" |
 | `layer` | Clothing layer 1…4 (0 — not clothing) |
@@ -246,21 +246,21 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 | `skirt(waist, length, kind)` | Skirt: `straight`, `a`, `bell`, `circle`; `pleats=n` — pleats as geometry; `top=bodice` — a dress as one part | `waist`, `hem` |
 | `pants(waist, length)` | Trousers, shorts, leggings: pelvis, crotch bridge, two legs | `waist`, `end_L/R` |
 | `stocking(side, top, bottom)`, `glove(side, ...)` | Stocking, knee sock, sock; arm sleeve | `top`, `end` |
-| `collar(top, kind)` | Collar along the neckline: `stand`, `turndown`, `flat`, `ruffle` | |
+| `collar(top, kind)` | Collar along the neckline: `stand` — a stand built as an even ring around the neck axis (`height`, `front_drop` — how much lower it is at the front, as a fraction of the height), `turndown`, `flat`, `ruffle` | |
 | `cuff(piece, kind)`, `hem_band(piece, kind)` | Cuff and hem band: `band`, `turnback`, `ruffle` | |
 | `band(loop, profile)` | Any strip along an edge: custom profile, wave (frill, ruche) | |
 | `piping(loop)` | Piping — a cord along an edge | |
 | `belt(z, width, over=[...])` | Belt; `over` — garments under it: the belt lies on them | `ring`, `front` |
-| `buckle(center)` | Buckle — a build123d solid (`mesh="cad"`), added with `M.add(..., bind="hips")` | |
+| `buckle(center, normal, up)` | Buckle — a build123d solid (`mesh="cad"`) that lies on the belt with its tilt: `center=belt.edges["front"]`, `normal=belt.edges["front_normal"]`, `up=belt.edges["front_up"]`; added with `M.add(..., bind="hips")` | |
 | `buttons(z_top, z_bottom, count)`, `lacing(...)` | Row of buttons and lacing on the front or back | |
 | `ribbon(path, width, over=[...])` | Ribbon along a polyline; `over` — garments it lies on | `end` |
 | `bow(center)` | Bow: loops with a knot and two tails as separate blocks (tails get dynamics) | |
-| `shoe(side, shaft)` | Boot: a tube from the shaft through the bend at the ankle to a closed toe, flat sole | `top` |
+| `shoe(side, shaft)` | Boot built on a last: the shaft and the ankle bend follow the leg, from the instep to the toe the shoe has its own smooth shape (envelope of the foot plus `ease`, toe rounded over the `toe` fraction of the length, toe box at least `toe_height` high); a sole `sole` thick with a `welt` is a separate patch `<name>_sole` | `top` |
 
 - **Layers.** `layer` 1 — next to the body (tight-fitting, stockings), 2 — tops and skirts, 3 — outerwear, 4 — accessories. The offset of the inner side from the body grows with the layer: 2, 6, 10, 14 mm (`garment.LAYER_GAP`), so the layers do not intersect. `ease` — extra looseness on top of the offset: a number, a function of height or `{"waist": 2, "bust": 6}`. `tent` 0…1 — fabric tension across hollows (cleavage, between the legs).
 - **Grid density.** `cols` — loops around the torso (a multiple of 8), `row_step` — row spacing, mm (default 20). At the waist, elbow and knee the rows are densified automatically; `check` requires at least 3 loops across a bend.
 - **Binding.** `bind="auto"` — weights are transferred from the nearest body surface with interpolation inside the triangle, smoothed, and limited to 4 influences per vertex. A vertex on the left does not take weights from the right arm and leg. A rigid part — `bind="hips"` (a role or bone name).
-- **Dynamics.** `dynamics="stiff" | "soft"` or a dictionary: `preset`, `patch` (patch name), `chains` (chains around; 1 for a ribbon), `bones` (bones per chain), `v0`…`v1` — the section of the grid, top to bottom, where dynamics work, `blend` — width of the transition from body weights, `parent` — the root bone, `radius` — collision radius, `follow` — the fraction of thigh rotation that the chain root follows, `colliders`. A skirt fills in defaults itself: root on the pelvis, start at the hip line, 12 chains of 4 bones, `follow=0.9`. Body capsule colliders (thighs, shins, upper arms, forearms, pelvis, torso, head) are built automatically.
+- **Dynamics.** `dynamics="stiff" | "soft"` or a dictionary: `preset`, `patch` (patch name), `chains` (chains around; 1 for a ribbon), `bones` (bones per chain), `v0`…`v1` — the section of the grid, top to bottom, where dynamics work, `blend` — width of the transition from body weights, `parent` — the root bone, `radius` — collision radius, `follow` — the fraction of thigh rotation that the chain root follows, `colliders`. A skirt fills in defaults itself: root on the pelvis, start at the hip line, 12 chains of 4 bones, `follow=0.9`, colliders limited to the legs and the pelvis. Body capsule colliders (thighs, shins, upper arms, forearms, pelvis, torso, head) are built automatically.
 - **Hiding the body.** `hides=True`: a body vertex closer than 14 mm to the inner side of the garment and farther than 18 mm from its edges counts as covered; a body polygon is hidden if all its vertices are covered. Tuning — `hides=dict(reach=…, margin=…)`.
 
 ### What you get after `build`
@@ -275,6 +275,7 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
   - `тело` (body) — a clothing vertex has gone under the skin of its body part (hidden polygons are not counted);
   - `слой` (layer) — a vertex of an upper layer has gone under the outer surface of a lower layer on the same body part;
   - `коллайдер` (collider) — how far a collider pushed a chain joint (for reference: a large value means the hem lies on the thigh).
+  Chains of one dynamics zone are linked like a sheet: a joint is pulled towards the displacement of the neighbouring chains by the fraction `posetest.LATERAL` (0.75) when the neighbours are displaced more — the hem does not sag as a wedge between the thighs.
   The table "pose → part → kind → depth → location (nearest landmark)" is printed and written to `out/posetest/report.json`; next to it are a frame of each pose and close-ups of the four worst spots.
 - **Thresholds** (`posetest.PEN_BODY`, `PEN_LAYER`, `PEN_EXTREME`): 4 mm for the body and layers; 12 mm in the extreme poses `sit`, `squat`, `elbows_bent` — there the joint is bent by more than 90°, with linear skinning the body enters itself in the fold, and the clothing in the fold repeats this. Anything deeper than the threshold must be fixed: offset (`ease`), layer, length, binding, dynamics.
 - The showcase pose is `posetest.HERO` (standing, weight on one leg, arms relaxed); poses are defined by bone rotations in code: `("to", vector)`, `("bend", degrees, vector)`, `[("z", degrees)]`.
@@ -285,7 +286,11 @@ The tool's bodies: `bodies/mannequin_f` — a female MakeHuman figure (MPFB2, ba
 - **The chain root goes on the bone that drives the garment underneath.** A hem — on the pelvis, a ribbon on the chest — on the chest section. A ribbon at the belt with its root on the pelvis drifted 15 mm away from the shorts when the torso turned, and with its root on the spine — when bending.
 - **Skirt dynamics start at the hip line, not at the waist.** Above it the skirt follows the body together with the belt; starting right at the waist shifts the belt when bending.
 - **An overlay part lies on the clothing, not on the body.** A ribbon at the collar, computed from the body, ended up 12 mm under the T-shirt: at the cleavage the fabric is stretched (`tent`). Pass `over=[garment]`.
-- **Short skirt and the "sit" pose.** The thigh rises by 90°, and the hem must lie on it: `follow`, more chains and `radius` 30 help. A short skirt sitting on spring bones cannot be made completely free of penetrations — look at the render and decide by appearance.
+- **Short skirt and the "sit" pose.** The thigh rises by 90°, and the hem must lie on it: `follow`, more chains and `radius` 30 help. The chain between the thighs touches no collider; in the estimate the neighbouring chains pull it along (`posetest.LATERAL`), otherwise the front sags as a wedge through the legs. In the engine this needs a link between neighbouring chains (the `ring` field in `<name>_dynamics.json`) — look at the `pose_sit` frame.
+- **Do not shrink-wrap a stand collar point by point.** Pushing every point of the stand out of the body crumpled it, made the top edge uneven and stretched it upwards under the chin. The stand is built from rings around the neck axis: constant clearance, flat top edge, lower at the front.
+- **Footwear has its own shape, not a wrap of the foot.** A shell around the foot repeated the toes and the arch. From the instep to the toe the shoe is built on a last; the body inside may be anything.
+- **Place a rigid overlay along the tilt of the part under it.** A buckle standing vertically looked foreign on a tilted belt: take the normal and "up" from the belt.
+- **Hem colliders are the legs and the pelvis.** In a forward bend the torso capsule comes from above and pushed the hem upwards, into the vest.
 - **Check clearance between vertices too.** A flat quad cuts off the convexity of the body: `push_out` also moves the corners of a cell whose middle is closer than half the offset.
 - **Body hiding does not reach the edge.** A strip of the body at the edge of the garment stays visible (`margin`): otherwise a hole shows in the neckline and under the hem.
 
@@ -368,5 +373,5 @@ All examples must pass; afterwards look at the example sheets (`examples/<name>/
 - Feature edges are sharp creases between patches; radii on edges are not built yet.
 - Import into the engine is not automated; the spring bone component in the engine is on the project side.
 - Clothing: `posetest` is an estimate based on linear skinning and static equilibrium of the chains, not game physics. A short skirt in the "sit" and "squat" poses gives penetrations up to the extreme-pose threshold and above.
-- Clothing: the open front (`open_front`) has no lapels or overlapping fastening; a stocking ends at the ankle (the foot is covered by footwear); the boot has no heel; on the atlas the border edge quads share one small island.
+- Clothing: the open front (`open_front`) has no lapels or overlapping fastening; a stocking ends at the ankle (the foot is covered by footwear); the boot has no heel, and its sole goes below the floor by its thickness (the character root is raised by it in the game); on the atlas the border edge quads share one small island.
 - Clothing: a CAD part is bound to a single bone only.

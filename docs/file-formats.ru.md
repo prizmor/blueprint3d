@@ -123,7 +123,8 @@
   "chains": [
     {"part", "bones": [names root→tip], "parent", "preset",
      "stiffness", "damping", "gravity", "hit_radius_m",
-     "follow": [{"bone", "weight"}], "bone_length_m", "colliders": [names]}
+     "follow": [{"bone", "weight"}], "bone_length_m", "colliders": [names],
+     "ring": {"index", "count", "closed"}}   // место цепочки среди цепочек своей зоны (соседние связаны)
   ],
   "colliders": [
     {"name", "bone", "shape": "capsule", "radius_m", "along_bone",

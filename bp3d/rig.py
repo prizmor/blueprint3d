@@ -334,6 +334,7 @@ class Rig:
             ch.append(dict(part=c["part"], bones=c["names"], parent=sk.names[c["parent"]], preset=pr["preset"],
                            stiffness=pr["stiffness"], damping=pr["damping"], gravity=pr["gravity"],
                            hit_radius_m=round(pr["radius"] / 1000, 4),
+                           ring=dict(index=c["index"], count=c["count"], closed=bool(c["closed"])),
                            follow=[dict(bone=sk.names[f["bone"]], weight=f["weight"]) for f in c["follow"]],
                            bone_length_m=[round(float(np.linalg.norm(c["joints"][i + 1] - c["joints"][i])) / 1000, 4)
                                           for i in range(len(c["names"]))], colliders=use))
