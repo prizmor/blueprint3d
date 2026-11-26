@@ -232,6 +232,7 @@ class Rig:
         if body is None:
             raise ValueError("у модели нет тела: Model.body (Outfit(M, BODY) ставит его сам)")
         self.body = body
+        self.model = model
         self.parts = [p for p in model.parts if p.group not in ("phantom", "theory")]
         self.chains = [c for p in self.parts if p.mesh == "quad" for c in chains(p, body)]
         extra = []

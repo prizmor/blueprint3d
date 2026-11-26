@@ -47,7 +47,7 @@ Depends on: `build`, `drawing`, lazily `body`, `posetest`, `mannequin`.
 - `PALETTE` — 17 named colours (a suggestion; the user chooses). `rgb(color)` accepts a palette name, `#RRGGBB` or a tuple and returns sRGB floats 0–1.
 - `Part` — dataclass: `key, pos, name, material, shape, finish="paint", group="ext", note, count=True, mesh="cad", quad, bind, dynamics, layer=0, hides, color, pattern, info`.
 - `Model(code, title, subtitle="", parts=[], bom_extra={}, body=None)`:
-  - `add(...)` validates key uniqueness and finish; a `QuadMesh` passed as `shape` becomes `quad` and `shape` becomes `quad.brep()`, `mesh` defaults to `"quad"`; returns the B-rep.
+  - `add(...)` validates key uniqueness and finish; a `QuadMesh` passed as `shape` becomes `quad` and `shape` becomes `quad.brep()`, `mesh` defaults to `"quad"`; returns the B-rep. `variant="group:name"` goes to `info["variant"]`; `variant_groups()`, `inactive(choose)` — keys of parts of non-chosen variants, `variants_exclusive(a, b)`.
   - `ext()`, `internal()`, `bom()` (skips `phantom`/`theory`, sums quantities by `count`, applies `bom_extra`).
 
 Groups: `ext` visible; `int` internal (dashed, separate collection in 3D); `glass` (not projected, in sections, transparent in renders); `phantom` (surroundings: thin phantom line, not in BOM or 3D); `theory` (theoretical surfaces: only grids/lines plans).
@@ -72,12 +72,12 @@ Watch out: `bspline_surface` deliberately does **not** use `GeomAPI_PointsToBSpl
 **Owns:** polygonal meshes built from the same grids, for game topology. **Hashed.**
 
 - Tags `OUTER, INNER, RIM = 0, 1, 2`.
-- `Patch(G, closed_u, closed_v, name, uv_scale)` — one grid = one UV island unrolled by mean row lengths (mm). Normal `du × dv` outward. `deviation()` compares the cell centre of the cubic spline with the quad.
+- `Patch(G, closed_u, closed_v, name, uv_scale)` — one grid = one UV island unrolled by mean row lengths (mm). Normal `du × dv` outward. `deviation()` compares the cell centre of the cubic spline with the quad. `mask` — kept grid cells (cut-outs, `Outfit.cutout`), `cells()`.
 - `QuadMesh` — `V (N,3)`, `F (M,4)` (triangle: last index −1), `UV (M,4,2)` per corner in island mm, `face_island`, `face_tag`, `islands`, `vpatch`, `vuv`, `vside`, `sharp`, `patches`, `thickness`, `two_sided`.
-  - `from_patches(patches, weld=1e-3, sharp_borders=False)` → `_weld` (KD-tree, same side only; faces collapsing to 3 vertices become poles).
+  - `from_patches(patches, weld=1e-3, sharp_borders=False)` → `_weld` (KD-tree, same side only; faces collapsing to 3 vertices become poles). Masked cells are not faces; vertices inside cut-outs are dropped (`_drop_unused`), their `gid` is −1.
   - `solidify(t, inner_uv=0.5)` — inner layer along vertex normals with mitre (≤ 2t), rim quads on open edges; inner faces keep the first vertex so both layers share the triangulation diagonal; rim islands share one strip.
   - `brep()` — compound of B-spline faces of the **outer layer only, zero thickness** (for views); sections of quad parts slice the mesh instead.
-  - `check(aspect_max=8.0)`, `uv_stretch()`, `deviation()`, `counts()`, `merged`, `transformed`, `mirrored_y`, `triangles`.
+  - `check(aspect_max=8.0)`, `uv_stretch()`, `deviation()`, `counts()`, `merged`, `transformed`, `mirrored_y`, `triangles`. `topology(tol)` — poles (interior vertices of the outer layer with valence ≠ 4, with positions), valence histogram, T-vertices (a vertex on another open edge).
 - Builders: `quad_skin(bands, t)`, `quad_shell`, `quad_tube(G, caps)`, `quad_sweep(profile, path, corners)`, `revolve_quad`, `box_quad`, `cap_grid` (even ring).
 - Grid generators: `spacing(n, dense=[(c, w, k)])` (smooth Gaussian density), `resample_closed/open`, `frames`, `sweep_grid`, `loft_grid`, `revolve_grid`.
 - `slice_mesh(V, T, origin, normal)` — plane section polylines.
@@ -129,7 +129,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 - **Roles.** `guess_roles(names, parent)` maps bones to `hips, spine, chest, upper_chest, neck, head, clavicle/upper_arm/forearm/hand/thigh/shin/foot/toe _L/_R` by name tokens (Unity Humanoid, Mixamo, UE/MakeHuman game_engine, Rigify); shallowest match wins; bones with `twist, roll, ik, pole, helper, end, ctrl, target…` are skipped. Unroled bones inherit the nearest ancestor's role (fingers → hand).
 - **Landmarks** `lm`: heights `waist, bust, underbust, hips, crotch, armpit, neck_base, head_base, knee, ankle, height`; joint points `shoulder/elbow/wrist/hip/knee/ankle/armpit/shoulder_top _L/_R`; `elbow_t`, `knee_t`. Computed from bones, rays and horizontal sections (perimeter extrema).
 - **Measurements** `measures`: tape-measure girths (convex hull) and lengths, rounded to 0.1 mm.
-- **Geometry helpers:** `closest(P)` (signed distance, point, triangle, barycentrics), `weights_at(P)`, `push_out(G, clearance)`, `section`, `ring`, `torso_ring/torso_grid`, `limb_point/limb_frame/limb_ring/limb_grid`, `nearest_landmark`.
+- **Geometry helpers:** `closest(P)` (signed distance, point, triangle, barycentrics), `weights_at(P)`, `push_out(G, clearance)`, `section`, `ring`, `torso_ring/torso_grid`, `limb_point/limb_frame/limb_ring/limb_grid`, `nearest_landmark`. `torso_ring/torso_grid(…, phase)` — `phase` shifts the ring points by a fraction of a step (0.5 — the centre front and back fall on an edge).
 - **Poses:** `pose(spec)`, `pose_on(skel, spec)` with `("to", vec)`, `("bend", deg, vec)`, `[(axis, deg)]`, `"_root"`; unsided keys apply to both sides, mirrored.
 - `Skeleton`, `Surface`, `skin_points` (linear blend skinning).
 
@@ -140,7 +140,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 - Constants: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` mm, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, `DYNAMICS = {stiff, soft, rigid}` presets (stiffness, damping, gravity, radius).
 - `Piece(patches, t, edges, solid, joints, name)` — outer-surface grids with named edges other blocks attach to; joints for the joint-loop check.
 - `Outfit(model, body, cols=48)` — sets `model.body`, adds the body as a `phantom` part; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` welds pieces into one quad part with thickness and fills `info` (gap, joints, regions, lining).
-- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`; helpers `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
+- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`, `panel_at`, `hood`, `drawstring`, `kangaroo_pocket`, `cargo_pocket`, `cutout`; helpers `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
 
 ## `rig.py`
 
@@ -159,7 +159,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 
 - `POSES` — `rest, t_pose, arms_down, arms_up, arms_forward, elbows_bent, squat, wide_step, side_step, bend_forward, twist, sit`; `HERO` presentation pose (excluded from tests).
 - `solve(rig, pose)` — body bones from the pose; spring chains in **static equilibrium** (spring towards rest orientation, gravity, push-out from colliders, segment lengths kept), then chains of one zone are linked laterally: a joint follows the larger displacement of its ring neighbours by `LATERAL = 0.75`. Damping is not used.
-- `run(model, poses)` — skins every part with the FBX weights and measures: `body` (vertex under the skin of its own region), `layer` (upper layer under the outer surface of a lower one), `collider` (how far a collider pushed a chain). Depths beyond 30 mm are ignored as "other side".
+- `run(model, poses)` — skins every part with the FBX weights and measures: `body` (vertex under the skin of its own region), `layer` (upper layer under the outer surface of a lower one), `collider` (how far a collider pushed a chain). Depths beyond 30 mm are ignored as "other side". Variants of one group (`Model.variants_exclusive`) are not compared with each other.
 - Thresholds `PEN_BODY = PEN_LAYER = 4.0` mm, `PEN_EXTREME = 12.0` mm in `sit, squat, elbows_bent`; `limit(pose, kind)`.
 - Stretch and compression rows measure an outer-layer edge against the skin under it (`STRETCH_MAX`, `COMPRESS_MAX`, `STRETCH_EXTREME`, `STRETCH_ZONES`); `skin_self(body, Vb)` finds skin that went into another body part, penetrations there are reported as `skin` and not counted.
 - `bone_matrices(rig, pose)` — 4×4 per bone for `bl_pose.py`.

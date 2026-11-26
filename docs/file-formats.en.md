@@ -71,7 +71,7 @@ Written by `bl_build.py` / `bl_garment.py`, extended by `build`.
 
 | Key | Content |
 |---|---|
-| `parts` | `{key: {pos, mesh, tris, quads, non_manifold_edges, bbox_dev_mm, group}}`; quad parts add `tris_only, brep_dev_max_mm, brep_dev_mean_mm, aspect_max, uv_stretch`; garments add `verts, layer, bind, dynamics` |
+| `parts` | `{key: {pos, mesh, tris, quads, non_manifold_edges, bbox_dev_mm, group}}`; quad parts add `tris_only, brep_dev_max_mm, brep_dev_mean_mm, aspect_max, uv_stretch, tverts, poles, valence`; garments add `verts, layer, bind, dynamics` |
 | `warnings` | list of strings: size deviation > 3 mm, part missing from glTF, weld problems |
 | `atlas` | `{px, px_per_cm, islands, texture}` |
 | `renders` | check renders produced |
@@ -102,7 +102,7 @@ Written by `bl_build.py` / `bl_garment.py`, extended by `build`.
 {
   code, title,
   parts: [ {key, pos, name, finish, group, mesh: "cad"|"quad", bbox_mm[6], color, layer, gray, metal, rough,
-            quad parts: stats, colored, two_sided, dynamics} ],
+            quad parts: stats, colored, two_sided, dynamics, variant} ],
   quads: "<path to quads.npz>" | null,
   atlas: {size_mm, px, px_per_cm, islands: [{part, name, tag, x, y, w, h, scale, color, patterns}]},
   rig (garments): {bones: [{name, parent, head, tail}], bone_names, rigid: {key: bone}, hidden_polys,
@@ -166,7 +166,7 @@ Images: `pose_<pose>.png` (each pose), `worst<n>_<pose>_<part>.png` (up to four 
 
 ### `_shots.json` (Python → `bl_pose.py`, temporary)
 
-`{"shots": [{name, pose: {bone: 16 floats row-major, CAD mm}, mode: solid|wire|toon|matte, dir, target, radius, res}]}`.
+`{"shots": [{name, pose: {bone: 16 floats row-major, CAD mm}, mode: solid|wire|toon|matte|inspect, dir, target, radius, res, parts, hide}]}` (`parts` — show only these parts, `hide` — hide these: non-chosen variants).
 
 ## Caches
 

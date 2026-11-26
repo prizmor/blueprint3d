@@ -8,7 +8,7 @@
 |---|---|
 | Drawing | A drafting-standard sheet (GOST style): SVG, PNG, PDF, white and blueprint themes. Hidden-line projections, sections, detail views, dimensions, callouts, parts list |
 | 3D model | `.blend`, `.fbx`, `.glb`, renders, report. Either a CAD tessellation (grey block-out) or a clean quad mesh with UVs built straight from the construction grids |
-| Garments | Clothing on a rigged body: quad topology, UVs, skin weights, spring-bone chains, body masking, FBX with armature, pose test with a penetration table |
+| Garments | Clothing on a rigged body: quad topology with one-piece layouts (hoods, crotch gussets, cut-outs), folds as geometry and normal maps, overlays and pockets, rigid footwear, part variants, UVs, skin weights, spring-bone chains, body masking, FBX with armature, pose test with a penetration and stretch table |
 
 Works for hard-surface objects (vehicles, weapons, gear, furniture, buildings) and for character clothing in an anime-game style (modelled garments, not cloth simulation).
 

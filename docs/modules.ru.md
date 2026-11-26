@@ -47,7 +47,7 @@
 - `PALETTE` — 17 именованных цветов (предложение; выбирает пользователь). `rgb(color)` принимает имя из палитры, `#RRGGBB` или кортеж и возвращает sRGB во float 0–1.
 - `Part` — dataclass: `key, pos, name, material, shape, finish="paint", group="ext", note, count=True, mesh="cad", quad, bind, dynamics, layer=0, hides, color, pattern, info`.
 - `Model(code, title, subtitle="", parts=[], bom_extra={}, body=None)`:
-  - `add(...)` проверяет уникальность ключа и отделку; `QuadMesh`, переданный как `shape`, становится `quad`, а `shape` становится `quad.brep()`, `mesh` по умолчанию `"quad"`; возвращает B-rep.
+  - `add(...)` проверяет уникальность ключа и отделку; `QuadMesh`, переданный как `shape`, становится `quad`, а `shape` становится `quad.brep()`, `mesh` по умолчанию `"quad"`; возвращает B-rep. `variant="группа:имя"` пишется в `info["variant"]`; `variant_groups()`, `inactive(choose)` — ключи деталей невыбранных вариантов, `variants_exclusive(a, b)`.
   - `ext()`, `internal()`, `bom()` (пропускает `phantom`/`theory`, суммирует количество по `count`, применяет `bom_extra`).
 
 Группы: `ext` — видимые; `int` — внутренние (штриховой линией, отдельная коллекция в 3D); `glass` (не проецируется, есть в разрезах, прозрачное в рендерах); `phantom` (окружение: тонкая линия фантома, нет в BOM и в 3D); `theory` (теоретические поверхности: только сетки/планы линий).
@@ -72,12 +72,12 @@
 **Отвечает за:** полигональные меши из тех же сеток, для игровой топологии. **Хешируется.**
 
 - Метки `OUTER, INNER, RIM = 0, 1, 2`.
-- `Patch(G, closed_u, closed_v, name, uv_scale)` — одна сетка = один UV-остров, развёрнутый по средним длинам рядов (мм). Нормаль `du × dv` наружу. `deviation()` сравнивает центр ячейки кубического сплайна с квадом.
+- `Patch(G, closed_u, closed_v, name, uv_scale)` — одна сетка = один UV-остров, развёрнутый по средним длинам рядов (мм). Нормаль `du × dv` наружу. `deviation()` сравнивает центр ячейки кубического сплайна с квадом. `mask` — оставшиеся ячейки сетки (вырезы, `Outfit.cutout`), `cells()`.
 - `QuadMesh` — `V (N,3)`, `F (M,4)` (треугольник: последний индекс −1), `UV (M,4,2)` по углам в мм острова, `face_island`, `face_tag`, `islands`, `vpatch`, `vuv`, `vside`, `sharp`, `patches`, `thickness`, `two_sided`.
-  - `from_patches(patches, weld=1e-3, sharp_borders=False)` → `_weld` (KD-дерево, только одна сторона; грани, схлопнувшиеся до 3 вершин, становятся полюсами).
+  - `from_patches(patches, weld=1e-3, sharp_borders=False)` → `_weld` (KD-дерево, только одна сторона; грани, схлопнувшиеся до 3 вершин, становятся полюсами). Ячейки вне маски — не грани; вершины внутри вырезов убираются (`_drop_unused`), их `gid` — −1.
   - `solidify(t, inner_uv=0.5)` — внутренний слой вдоль нормалей вершин со скосом (≤ 2t), квады кромки на открытых рёбрах; внутренние грани сохраняют первую вершину, чтобы оба слоя делили диагональ триангуляции; острова кромки делят одну полосу.
   - `brep()` — составное тело из B-сплайн-граней **только внешнего слоя, нулевой толщины** (для видов); разрезы квадовых деталей вместо этого режут меш.
-  - `check(aspect_max=8.0)`, `uv_stretch()`, `deviation()`, `counts()`, `merged`, `transformed`, `mirrored_y`, `triangles`.
+  - `check(aspect_max=8.0)`, `uv_stretch()`, `deviation()`, `counts()`, `merged`, `transformed`, `mirrored_y`, `triangles`. `topology(tol)` — полюсы (внутренние вершины наружного слоя с валентностью ≠ 4, с координатами), гистограмма валентностей, T-вершины (вершина на чужом открытом ребре).
 - Построители: `quad_skin(bands, t)`, `quad_shell`, `quad_tube(G, caps)`, `quad_sweep(profile, path, corners)`, `revolve_quad`, `box_quad`, `cap_grid` (чётное кольцо).
 - Генераторы сеток: `spacing(n, dense=[(c, w, k)])` (плавная гауссова плотность), `resample_closed/open`, `frames`, `sweep_grid`, `loft_grid`, `revolve_grid`.
 - `slice_mesh(V, T, origin, normal)` — полилинии сечения плоскостью.
@@ -129,7 +129,7 @@
 - **Роли.** `guess_roles(names, parent)` сопоставляет кости с `hips, spine, chest, upper_chest, neck, head, clavicle/upper_arm/forearm/hand/thigh/shin/foot/toe _L/_R` по токенам имён (Unity Humanoid, Mixamo, UE/MakeHuman game_engine, Rigify); побеждает самое неглубокое совпадение; кости с `twist, roll, ik, pole, helper, end, ctrl, target…` пропускаются. Кости без роли наследуют роль ближайшего предка (пальцы → кисть).
 - **Ориентиры** `lm`: высоты `waist, bust, underbust, hips, crotch, armpit, neck_base, head_base, knee, ankle, height`; точки суставов `shoulder/elbow/wrist/hip/knee/ankle/armpit/shoulder_top _L/_R`; `elbow_t`, `knee_t`. Вычисляются по костям, лучам и горизонтальным сечениям (экстремумы периметра).
 - **Мерки** `measures`: обхваты, как сантиметровой лентой (выпуклая оболочка), и длины, округлённые до 0.1 мм.
-- **Геометрические помощники:** `closest(P)` (знаковое расстояние, точка, треугольник, барицентрические координаты), `weights_at(P)`, `push_out(G, clearance)`, `section`, `ring`, `torso_ring/torso_grid`, `limb_point/limb_frame/limb_ring/limb_grid`, `nearest_landmark`.
+- **Геометрические помощники:** `closest(P)` (знаковое расстояние, точка, треугольник, барицентрические координаты), `weights_at(P)`, `push_out(G, clearance)`, `section`, `ring`, `torso_ring/torso_grid`, `limb_point/limb_frame/limb_ring/limb_grid`, `nearest_landmark`. `torso_ring/torso_grid(…, phase)` — `phase` сдвигает точки кольца на долю шага (0.5 — середины переда и спинки на ребре).
 - **Позы:** `pose(spec)`, `pose_on(skel, spec)` с `("to", vec)`, `("bend", deg, vec)`, `[(axis, deg)]`, `"_root"`; ключи без стороны применяются к обеим сторонам зеркально.
 - `Skeleton`, `Surface`, `skin_points` (линейный скиннинг).
 
@@ -140,7 +140,7 @@
 - Константы: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` мм, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, пресеты `DYNAMICS = {stiff, soft, rigid}` (жёсткость, затухание, гравитация, радиус).
 - `Piece(patches, t, edges, solid, joints, name)` — сетки внешней поверхности с именованными краями, к которым крепятся другие блоки; суставы — для проверки петель у суставов.
 - `Outfit(model, body, cols=48)` — выставляет `model.body`, добавляет тело как деталь `phantom`; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` сваривает куски в одну квадовую деталь с толщиной и заполняет `info` (зазор, суставы, области, подкладка).
-- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`; помощники `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
+- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`, `panel_at`, `hood`, `drawstring`, `kangaroo_pocket`, `cargo_pocket`, `cutout`; помощники `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
 
 ## `rig.py`
 
@@ -159,7 +159,7 @@
 
 - `POSES` — `rest, t_pose, arms_down, arms_up, arms_forward, elbows_bent, squat, wide_step, side_step, bend_forward, twist, sit`; презентационная поза `HERO` (исключена из тестов).
 - `solve(rig, pose)` — кости тела из позы; цепочки пружин в **статическом равновесии** (пружина к ориентации покоя, гравитация, выталкивание из коллайдеров, длины сегментов сохраняются). Затухание не используется.
-- `run(model, poses)` — делает скиннинг каждой детали весами FBX и измеряет: `body` (вершина под кожей своей области), `layer` (верхний слой под внешней поверхностью нижнего), `collider` (насколько коллайдер вытолкнул цепочку). Глубины больше 30 мм игнорируются как «другая сторона».
+- `run(model, poses)` — делает скиннинг каждой детали весами FBX и измеряет: `body` (вершина под кожей своей области), `layer` (верхний слой под внешней поверхностью нижнего), `collider` (насколько коллайдер вытолкнул цепочку). Глубины больше 30 мм игнорируются как «другая сторона». Варианты одной группы (`Model.variants_exclusive`) друг с другом не сравниваются.
 - Цепочки одной зоны связаны поперёк: сустав идёт за большим смещением соседей по кольцу на долю `LATERAL = 0.75`.
 - Пороги `PEN_BODY = PEN_LAYER = 4.0` мм, `PEN_EXTREME = 12.0` мм в `sit, squat, elbows_bent`; `limit(pose, kind)`.
 - Строки растяжения и сжатия сравнивают ребро наружного слоя с кожей под ним (`STRETCH_MAX`, `COMPRESS_MAX`, `STRETCH_EXTREME`, `STRETCH_ZONES`); `skin_self(body, Vb)` находит кожу, ушедшую в другую часть тела, проникновения туда идут строкой `skin` и в провал не считаются.

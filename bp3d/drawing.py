@@ -555,7 +555,8 @@ def build_body(model, S):
         pv = Placed(proj, v["k"], v["at"])
         placed[v["id"]] = pv
         keys, groups = v.get("parts"), v.get("groups", ("ext",))
-        sel = [p for p in model.parts if _match(p, keys) and not _match(p, v.get("exclude"), False)]
+        off_ = model.inactive(v.get("variant", ()))           # невыбранные варианты деталей не рисуются
+        sel = [p for p in model.parts if _match(p, keys) and not _match(p, v.get("exclude"), False) and p.key not in off_]
         ext = [p.shape for p in sel if p.group in groups]
         internal = [p.shape for p in sel if p.group == "int" and "int" not in groups]
         phantom = [p.shape for p in sel if p.group == "phantom" and not hasattr(p.shape, "T")]
@@ -644,8 +645,9 @@ def build_body(model, S):
             proj = ViewProj(kind, sec["look_at"])
         pv = Placed(proj, sec["k"], sec["at"])
         placed["sec:" + sec["id"]] = pv
+        off_ = model.inactive(sec.get("variant", ()))
         sel = [p for p in model.parts if _match(p, sec.get("parts")) and not _match(p, sec.get("exclude"), False)
-               and p.group not in ("phantom", "theory")]
+               and p.group not in ("phantom", "theory") and p.key not in off_]
         c = sec.get("clip")
         if c:
             a = pv.s(c[0])

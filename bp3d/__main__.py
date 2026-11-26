@@ -206,11 +206,44 @@ def check_quad(p, acc):
     if st["aspect_bad"]:
         why.append(f"вытянутых квадов {st['aspect_bad']} (до {st['aspect_max']:.1f}:1, порог {ASPECT_MAX:g}:1) — "
                    "выровнять число рядов по обоим направлениям")
+    if st.get("tverts"):
+        why.append(f"T-вершин {st['tverts']} — лоскуты сварены не по общим точкам (согласовать число рядов на кромке)")
     if st["brep_dev_max_mm"] > BREP_DEV_MAX:
         print(f"  ! {p.key}: квады отходят от B-сплайна сетки на {st['brep_dev_max_mm']:.2f} мм — добавить рядов")
     if st["tris"]:
         print(f"  {p.key}: треугольников {st['tris']} (полюса вращения, сварка рядов)")
     return why
+
+
+BEND_ROLES = {"upper_arm": "плечо", "forearm": "локоть", "hand": "запястье", "thigh": "тазобедренный",
+              "shin": "колено", "foot": "щиколотка"}
+BEND_R = 45.0           # мм: полюс ближе этого к суставу — в зоне сгиба (деформируется с изломом)
+
+
+def check_poles(model, p):
+    """Полюсы раскладки вне зон сгиба: предупреждение с местом (узлы — развилка в паху, подмышке, капюшон)."""
+    import numpy as np
+    body = model.body
+    topo = p.quad.topology()
+    pts = []
+    for role, nm in BEND_ROLES.items():
+        for s in "LR":
+            r = f"{role}_{s}"
+            if r in body.roles:
+                pts.append((body.joint(r), f"{nm} {s}"))
+    near = []
+    for P, n in topo["poles"]:
+        d = [(float(np.linalg.norm(P - J)), nm) for J, nm in pts]
+        if d:
+            dm, nm = min(d)
+            if dm < BEND_R:
+                near.append(f"{nm} ({n} рёбер, {dm:.0f} мм)")
+    if topo["poles"]:
+        h = topo["valence"]
+        print(f"  {p.key}: полюсов {len(topo['poles'])} (3 ребра: {h.get(3, 0)}, 5: {h.get(5, 0)}, 6+: "
+              f"{sum(c for k, c in h.items() if k >= 6)})")
+    if near:
+        print(f"  ! {p.key}: полюс в зоне сгиба — " + "; ".join(near[:4]) + " — увести узел раскладки от сустава")
 
 
 def check_garment(model):
@@ -223,6 +256,7 @@ def check_garment(model):
         if p.mesh != "quad" or p.group in ("phantom", "theory"):
             continue
         q = p.quad
+        check_poles(model, p)
         h = body.closest(q.V)
         i = int(h["dist"].argmin())
         dmin = float(h["dist"][i])
@@ -299,8 +333,8 @@ def cmd_posetest(obj, args):
     renders = {}
     blend = _garment_blend(obj, args)
     if blend and not args.no_render:
-        shots = [dict(name=f"pose_{k}", pose=PT.bone_matrices(rig, k), mode="solid", dir=(0.6, -1, 0.15), res=(900, 1300))
-                 for k in poses]
+        shots = [dict(name=f"pose_{k}", pose=PT.bone_matrices(rig, k), mode="solid", dir=(0.6, -1, 0.15), res=(900, 1300),
+                      hide=sorted(model.inactive())) for k in poses]
         worst = [r for r in rows if r["kind"] not in ("collider", "skin") and r["point"]][:4]
         cx = model.body.center_x(model.body.lm["waist"])
         for n, r in enumerate(worst):
@@ -393,6 +427,7 @@ def cmd_render_garment(obj, args, blend):
     rig = Rig(model)
     out = os.path.abspath(args.out) if args.out else os.path.join(obj, "out", "render")
     pose = args.pose or "hero"
+    hide = sorted(model.inactive(getattr(args, "variant", None) or ()))
     if getattr(args, "inspect", ""):
         # осмотр формы деталей: светлый материал, свет со всех сторон, шесть ракурсов, поза покоя (или --pose)
         parts = [k.strip() for k in args.inspect.split(",") if k.strip()]
@@ -416,6 +451,8 @@ def cmd_render_garment(obj, args, blend):
                   dict(name="rest_toon", pose={}, mode="toon", dir=(0, -1, 0.05), res=(1400, 1900)),
                   dict(name=f"{pose}_matte", pose=M, mode="matte", dir=(0.55, -1, 0.12), res=(1400, 1900)),
                   dict(name=f"{pose}_wire", pose=M, mode="wire", dir=(0.55, -1, 0.12), res=(1400, 1900))]
+    for s_ in shots:
+        s_["hide"] = hide                                  # невыбранные варианты деталей
     _run_pose(blend, shots, out)
     src = os.path.join(os.path.dirname(blend), "report.json")
     rep = dict(pose=pose, renders=[s["name"] + ".png" for s in shots])
@@ -669,6 +706,8 @@ def main():
     s.add_argument("--model", default="", help="другой .blend (например, черновая сборка)")
     s.add_argument("--out", default="", help="папка результата")
     s.add_argument("--pose", default="", help="одежда: поза показа (по умолчанию hero), см. posetest.POSES")
+    s.add_argument("--variant", nargs="*", default=[], help="одежда: варианты деталей для кадров, «группа:имя» "
+                                                               "(по умолчанию — первый вариант каждой группы)")
     s.add_argument("--inspect", default="", help="одежда: осмотр формы деталей (ключи через запятую) — светлый материал, "
                                                  "свет со всех сторон, шесть ракурсов")
     add("status", "состояние апрува")
