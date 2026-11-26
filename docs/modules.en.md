@@ -147,7 +147,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 **Owns:** checking a garment in motion without a game engine.
 
 - `POSES` — `rest, t_pose, arms_down, arms_up, arms_forward, elbows_bent, squat, wide_step, side_step, bend_forward, twist, sit`; `HERO` presentation pose (excluded from tests).
-- `solve(rig, pose)` — body bones from the pose; spring chains in **static equilibrium** (spring towards rest orientation, gravity, push-out from colliders, segment lengths kept). Damping is not used.
+- `solve(rig, pose)` — body bones from the pose; spring chains in **static equilibrium** (spring towards rest orientation, gravity, push-out from colliders, segment lengths kept), then chains of one zone are linked laterally: a joint follows the larger displacement of its ring neighbours by `LATERAL = 0.75`. Damping is not used.
 - `run(model, poses)` — skins every part with the FBX weights and measures: `body` (vertex under the skin of its own region), `layer` (upper layer under the outer surface of a lower one), `collider` (how far a collider pushed a chain). Depths beyond 30 mm are ignored as "other side".
 - Thresholds `PEN_BODY = PEN_LAYER = 4.0` mm, `PEN_EXTREME = 12.0` mm in `sit, squat, elbows_bent`; `limit(pose, kind)`.
 - `bone_matrices(rig, pose)` — 4×4 per bone for `bl_pose.py`.

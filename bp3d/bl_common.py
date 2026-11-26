@@ -73,6 +73,9 @@ def _pattern(img, x0, y0, x1, y1, pxmm, isl, d):
     Wm, Hm = w / pxmm / s, h / pxmm / s
     kind = d["kind"]
     col = np.array(d["color"], np.float32)
+    if kind == "fill":                                   # весь остров одним цветом (подошва, вставка)
+        img[y0:y1, x0:x1] = col
+        return
     if kind == "stripe":
         t = U if d.get("dir", "v") == "u" else V          # dir — вдоль какой оси меняется цвет
         t = np.broadcast_to(t, (h, w))
@@ -109,7 +112,7 @@ def _pattern(img, x0, y0, x1, y1, pxmm, isl, d):
             t = {"u0": uu, "u1": Wm - uu, "v0": vv, "v1": Hm - vv}[e]
             m |= (t >= off) & (t < off + wd)
     else:
-        raise ValueError(f"узор {kind!r}: stripe, check, dots, trim")
+        raise ValueError(f"узор {kind!r}: fill, stripe, check, dots, trim")
     img[y0:y1, x0:x1][m] = col
 
 

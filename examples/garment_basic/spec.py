@@ -37,7 +37,7 @@ def build_model():
     # Слой 3 — пояс поверх шорт (over: пояс ложится на вещь под ним) и пряжка на одной кости
     belt = O.belt(z=("waist", -22), width=26, thick=3, layer=3, over=[shorts])
     O.add("belt", 3, "Пояс", "Кожа", belt, finish="leather", color="brown", layer=3)
-    M.add("buckle", 4, "Пряжка", "Латунь", O.buckle(belt.edges["front"] + np.array([-2.5, 0, 0])), finish="metal",
+    M.add("buckle", 4, "Пряжка", "Латунь", O.buckle(belt.edges["front"], normal=belt.edges["front_normal"], up=belt.edges["front_up"]), finish="metal",
           color="gold", bind="hips", layer=4)
 
     # Слой 4 — лента у ворота: два хвоста на груди, обвисают (preset "soft"), цепочка костей вдоль каждого.
