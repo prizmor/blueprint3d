@@ -1,0 +1,12 @@
+Blueprint3D
+Copyright 2026 Prizmor
+Original repository: https://github.com/prizmor/blueprint3d
+
+This product includes software developed by Prizmor and the Blueprint3D
+contributors, licensed under the Apache License, Version 2.0 (see LICENSE).
+
+examples/ and bodies/ are dedicated to the public domain under CC0 1.0
+(see the LICENSE files in those folders).
+
+bodies/mannequin_f was built with MPFB 2 (MakeHuman Plugin For Blender, not
+included) from MakeHuman core assets, which are CC0 1.0.

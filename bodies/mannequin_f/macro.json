@@ -1,0 +1,6 @@
+{
+ "macro": {"gender": 0.0, "age": 0.5, "muscle": 0.42, "weight": 0.36, "proportions": 1.0, "height": 0.6,
+           "cupsize": 0.55, "firmness": 0.75, "race": {"asian": 0.5, "caucasian": 0.5, "african": 0.0}},
+ "targets": {},
+ "rig": "game_engine"
+}

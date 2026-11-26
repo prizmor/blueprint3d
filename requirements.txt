@@ -1,0 +1,4 @@
+build123d==0.13.0
+# kit.bspline_surface интерполирует сетки через scipy (ставится и как зависимость build123d)
+scipy
+numpy

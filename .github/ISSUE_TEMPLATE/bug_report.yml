@@ -1,0 +1,30 @@
+name: Bug report
+description: Something does not work or gives a wrong result
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Command and full output
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Minimal spec.py (if possible)
+      render: python
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, Blender version, Blueprint3D commit
+    validations:
+      required: true

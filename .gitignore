@@ -1,0 +1,20 @@
+# Environments and caches (recreated by scripts/install.*)
+venv/
+.venv/
+.python/
+.mpfb/
+.cache/
+__pycache__/
+*.pyc
+
+# Generated output: drawings, models, renders - reproducible from spec.py
+out/
+tmp/
+
+# Blender backups and editor files
+*.blend1
+*.blend2
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

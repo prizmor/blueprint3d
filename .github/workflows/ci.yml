@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    # Hard-surface samples need only Python + build123d. The garment sample needs Blender
+    # (body export, posetest) and is checked by the maintainer locally.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Compile
+        run: python -m compileall -q bp3d examples
+      - name: Selftest (hard-surface samples)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m bp3d selftest --only starter pickup_front sedan_front quad_parts

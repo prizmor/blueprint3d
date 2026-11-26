@@ -1,0 +1,920 @@
+"""Одежда из проверенных блоков: каждая функция Outfit возвращает Piece — сетки наружной поверхности
+вещи, построенные по телу (bp3d.body), с кромками, к которым пристыковываются другие блоки.
+
+Это не симуляция ткани и не выкройки: вещь описывается сразу в 3D относительно тела —
+оболочка тела со смещением (лиф, рукав, чулок), лофт колец по ориентирам (юбка), полоса вдоль кромки
+(воротник, манжета, кант, оборка, пояс), жёсткие детали обычными средствами kit.
+
+    O = Outfit(M, BODY)                                    # M — Model, BODY — body.load(...)
+    top = O.bodice(layer=1, bottom="waist", neck="round")  # лиф с проймами и вырезом
+    sl = O.sleeve(top, "L", length=0.55, kind="puff")      # рукав от проймы лифа
+    O.add("blouse", 1, "Блуза", "Хлопок", [top, sl, O.sleeve(top, "R", length=0.55, kind="puff")],
+          finish="cloth", color="white", layer=1, hides=True)
+
+Слои: 1 — у тела (бельё, чулки, облегающее), 2 — верх и юбки, 3 — верхняя одежда, 4 — аксессуары.
+Отступ внутренней поверхности от тела растёт по слоям (LAYER_GAP), поэтому слои не пересекаются.
+Сетки всех блоков идут сверху вниз (v: от плеча к подолу, от плеча к запястью), нормаль — наружу.
+Правила и порядок работы — docs/manual.ru.md, раздел «Одежда».
+"""
+import math
+import numpy as np
+
+from .mesh import Patch, QuadMesh, quad_sweep, revolve_quad, spacing, resample_closed, resample_open, _fix_outward
+from .body import _smooth_circular
+
+LAYER_GAP = {1: 2.0, 2: 6.0, 3: 10.0, 4: 14.0}        # отступ внутренней поверхности слоя от тела, мм
+ROW_STEP = 20.0                                       # шаг рядов по умолчанию, мм
+JOINT_DENSE = 1.8                                     # во сколько раз гуще ряды у сустава
+MIN_JOINT_LOOPS = 3                                   # петель поперёк сгиба в зоне сустава (проверяет check)
+
+# Пресеты динамики (кости с пружиной). stiffness — насколько кость тянется к позе покоя (0…1),
+# damping — затухание (0…1), gravity — доля силы тяжести (0…1), radius — радиус столкновения кости, мм.
+DYNAMICS = {
+    "stiff": dict(stiffness=0.75, damping=0.45, gravity=0.10, radius=18.0),    # пружинит, держит форму
+    "soft": dict(stiffness=0.25, damping=0.20, gravity=0.60, radius=14.0),     # обвисает
+    "rigid": None,                                                             # без динамики
+}
+
+
+def smooth_line(line, closed=True, step=12.0, tension=0.0):
+    """Сгладить и уплотнить кромку: кубический сплайн через точки, шаг step мм (для полос вдоль кромки,
+    чтобы воротник и кант не повторяли углы редкой сетки)."""
+    from scipy.interpolate import CubicSpline
+    P = np.asarray(line, float)
+    Q = np.vstack([P, P[:1]]) if closed else P
+    d = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(Q, axis=0), axis=1))])
+    n = max(8, int(round(d[-1] / step)))
+    cs = CubicSpline(d, Q, bc_type="periodic" if closed else "natural")
+    t = np.linspace(0, d[-1], n, endpoint=not closed)
+    return cs(t)
+
+
+def smoothstep(x):
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3 - 2 * x)
+
+
+class Piece:
+    """Блок одежды: лоскуты наружной поверхности (patches) с толщиной t либо готовое тело (solid).
+    edges — именованные кромки (n, 3) для стыковки: "bottom", "neck", "armhole_L", "end", "hem"...
+    joints — зоны суставов, которые блок пересекает (для проверки плотности петель)."""
+
+    def __init__(self, patches=(), t=1.2, edges=None, solid=None, joints=(), name=""):
+        self.patches = list(patches)
+        self.t = t
+        self.edges = dict(edges or {})
+        self.solid = solid
+        self.joints = list(joints)
+        self.name = name
+
+
+class Outfit:
+    def __init__(self, model, body, cols=48, phantom=True):
+        """cols — число петель вокруг туловища по умолчанию (кратно 8)."""
+        self.M, self.B = model, body
+        self.cols = cols
+        model.body = body
+        if phantom and not any(p.key == "body" for p in model.parts):
+            model.add("body", None, "Тело (манекен)", "", body.shape(), group="phantom")
+
+    # ------------------------------------------------------------ служебное
+    def z(self, ref):
+        """Высота: число, имя ориентира ("waist") или (ориентир, смещение мм)."""
+        if isinstance(ref, (tuple, list)):
+            return self.z(ref[0]) + float(ref[1])
+        if isinstance(ref, str):
+            v = self.B.lm[ref]
+            return float(v[2]) if np.ndim(v) else float(v)
+        return float(ref)
+
+    def profile(self, spec):
+        """Отступ по высоте: число, функция z -> мм или {ориентир или высота: мм} с интерполяцией."""
+        if callable(spec):
+            return spec
+        if isinstance(spec, dict):
+            pts = sorted((self.z(k), float(v)) for k, v in spec.items())
+            zs, vs = [p[0] for p in pts], [p[1] for p in pts]
+            return lambda z: float(np.interp(z, zs, vs))
+        return lambda z: float(spec)
+
+    def gap(self, layer, t):
+        """Отступ НАРУЖНОЙ поверхности слоя от тела: зазор слоя + толщина."""
+        return LAYER_GAP[layer] + t
+
+    def _outward(self, patch):
+        """Развернуть лоскут нормалью от тела (обход по u), не меняя направление v."""
+        G = patch.G
+        i, j = G.shape[0] // 2, G.shape[1] // 2
+        pts = np.array([G[i, j], G[i // 2, j], G[min(i + i // 2, G.shape[0] - 1), j]])
+        idx = [(i, j), (i // 2, j), (min(i + i // 2, G.shape[0] - 1), j)]
+        nr = patch.normals()
+        h = self.B.closest(pts)
+        s = sum(float(nr[a, b] @ (p - q)) for (a, b), p, q in zip(idx, pts, h["point"]))
+        if s < 0:
+            return Patch(G[::-1], patch.closed_u, patch.closed_v, patch.name, patch.uv_scale)
+        return patch
+
+    def _rows(self, length, step, dense=()):
+        n = max(4, int(round(length / (step or ROW_STEP))) + 1)
+        extra = sum(2 * w * (k - 1) for _, w, k in dense)
+        return spacing(int(round(n * (1 + extra))), dense)
+
+    def add(self, key, pos, name, material, pieces, finish="cloth", color=None, layer=1, bind="auto",
+            dynamics=None, hides=None, pattern=None, note="", count=True, group="ext", t=None, lining=None):
+        """Собрать блоки в одну деталь: общие ряды свариваются, оболочка получает толщину, готовые тела
+        добавляются как есть. Заполняет слой, привязку, динамику и сведения для проверок."""
+        pieces = pieces if isinstance(pieces, (list, tuple)) else [pieces]
+        shells = [p for p in pieces if p.patches]
+        mesh = None
+        if shells:
+            mesh = QuadMesh.from_patches([q for p in shells for q in p.patches]).solidify(t if t is not None else shells[0].t)
+        for p in pieces:
+            if p.solid is not None:
+                mesh = p.solid if mesh is None else mesh.merged(p.solid)
+        dd = next((p.dyn_defaults for p in pieces if getattr(p, "dyn_defaults", None)), None)
+        if dynamics and dd:                          # умолчания динамики от блока (у юбки — таз, старт у бёдер)
+            fill = lambda d: {**dd, **(d if isinstance(d, dict) else dict(preset=d))}
+            dynamics = [fill(d) for d in dynamics] if isinstance(dynamics, (list, tuple)) else fill(dynamics)
+        info = dict(thickness=mesh.thickness, joints=[j for p in pieces for j in p.joints], gap=LAYER_GAP.get(layer, 0.0),
+                    regions={q.name: tuple(p.regions) for p in pieces if getattr(p, "regions", None) for q in p.patches})
+        if lining is not None:
+            info["lining"] = lining
+        self.M.add(key, pos, name, material, mesh, finish=finish, group=group, note=note, count=count, bind=bind,
+                   dynamics=dynamics, layer=layer, hides=hides, color=color, pattern=pattern, info=info)
+        return mesh
+
+    # ------------------------------------------------------------ туловище: труба
+    def tube(self, top, bottom, layer=1, ease=0.0, tent=0.2, t=1.2, cols=None, row_step=None, smooth=1.0,
+             name="tube", dense_at=("waist",)):
+        """Оболочка туловища между высотами top и bottom (не выше подмышек): корсаж, бандо, топ без
+        бретелей, кокетка юбки. ease — прибавка свободы поверх отступа слоя (число, функция или
+        {ориентир: мм}); tent — натяжение через впадины (0 — по телу, 1 — по выпуклой оболочке)."""
+        B = self.B
+        zt, zb = self.z(top), self.z(bottom)
+        if zt > B.lm["armpit"] - 8:
+            raise ValueError("tube: верх выше подмышек — для вещи с плечами используйте bodice()")
+        nu = cols or self.cols
+        dense = [((zt - self.z(k)) / (zt - zb), 30.0 / (zt - zb), JOINT_DENSE) for k in dense_at
+                 if zb + 10 < self.z(k) < zt - 10]
+        zs = zt + (zb - zt) * self._rows(zt - zb, row_step, dense)
+        e = self.profile(ease)
+        off = lambda z: self.gap(layer, t) + e(z)
+        G = B.torso_grid(zs, nu, offset=off, tent=tent, smooth=smooth)
+        G = B.push_out(G, np.array([[off(z) for z in zs]] * nu) - 0.3)
+        p = Patch(G, closed_u=True, name=name)
+        joints = [("талия", (B.center_x(B.lm["waist"]), 0.0, B.lm["waist"]), (0, 0, 1), 30.0, 260.0)] \
+            if zb < B.lm["waist"] - 30 and zt > B.lm["waist"] + 30 else []
+        return Piece([p], t, dict(top=G[:, 0], bottom=G[:, -1]), joints=joints, name=name)
+
+    # ------------------------------------------------------------ туловище: лиф с плечами
+    def bodice(self, layer=1, bottom="waist", ease=0.0, tent=0.25, t=1.2, cols=None, row_step=None,
+               neck="round", neck_depth=70.0, neck_width=None, back_depth=18.0, armhole_drop=14.0,
+               shoulder_out=0.0, open_front=False, smooth=1.0, name="bodice"):
+        """Лиф, топ, рубашка, жакет, жилет: труба от подмышек до bottom плюс верх с плечами, проймами
+        и вырезом. Кромки: bottom, neck, armhole_L, armhole_R (к ним стыкуются юбка, воротник, рукава).
+
+        neck — "round" | "v" | "square" | "boat" | "high"; neck_depth — глубина выреза спереди от линии
+        плеча, мм; neck_width — ширина выреза (по умолчанию от шеи); back_depth — глубина сзади.
+        armhole_drop — насколько низ проймы ниже подмышки; shoulder_out — вынос плеча за сустав, мм.
+        open_front=True — распашной перёд (жакет, жилет): полочки от выреза до низа, без середины.
+        ease — прибавка свободы: {"waist": 2, "bust": 8} или число; полуприлегающий силуэт — ease и tent."""
+        B, lm = self.B, self.B.lm
+        nu = cols or self.cols
+        if nu % 8:
+            raise ValueError("bodice: число петель cols должно быть кратно 8")
+        zt, zb = lm["armpit"] - armhole_drop, self.z(bottom)
+        e = self.profile(ease)
+        off = lambda z: self.gap(layer, t) + e(z)
+        dense = [((zt - lm["waist"]) / (zt - zb), 30.0 / (zt - zb), JOINT_DENSE)] if zb < lm["waist"] - 30 else []
+        zs = zt + (zb - zt) * self._rows(zt - zb, row_step, dense)
+        Gt = B.torso_grid(zs, nu, offset=off, tent=tent, smooth=smooth)
+        Gt = B.push_out(Gt, np.array([[off(z) for z in zs]] * nu) - 0.3)
+        ring = Gt[:, 0]
+        nq = nu // 4
+        a = max(2, int(round(nu * 22.0 / 360)))                    # половина низа проймы, в петлях
+        presets = dict(round=(1.0, 1.0), v=(1.0, 1.25), square=(1.15, 1.0), boat=(1.9, 0.35), high=(0.8, 0.3))
+        kw, kd = presets[neck]
+        yn = (neck_width / 2 if neck_width else (B.measures["neck"] / (2 * math.pi) + 14.0) * kw)
+        depth = neck_depth * kd
+        sA = 1.0 if ring[nq, 1] > 0 else -1.0                      # сторона первой четверти обхода
+        ytip = abs(lm["shoulder_top_L"][1]) + shoulder_out
+        # число петель половины выреза: по ширине выреза на уровне груди
+        yfront = np.abs(ring[nu // 2 - nq: nu // 2 + 1, 1])[::-1]  # |y| колонок от середины переда к боку
+        hn = int(np.clip(np.searchsorted(yfront, yn * 0.9), 2, nq - a - 2))
+        ns = nq - a - hn
+        nf = nu // 2 - 2 * a
+        cf = lambda j: nq + a + j
+        cb = lambda j: (nq - a - j) % nu
+        # --- поверхность плеч: веер лучей в плоскостях y = const (спереди через плечо на спину)
+        x0, z0 = B.center_x(zt), zt
+        ymax = ytip + 12.0
+        ys = np.linspace(-ymax, ymax, 41)
+        phis = np.linspace(-0.2, math.pi + 0.2, 61)
+        R = np.zeros((len(ys), len(phis)))
+        zcap = lm["neck_base"] + 30.0
+        for k, y in enumerate(ys):
+            _, r = B.ring((x0, y, z0), (0, 1, 0), (-1, 0, 0), thetas=phis, mode="far")
+            lim = np.where(np.sin(phis) > 0.05, (zcap - z0) / np.maximum(np.sin(phis), 0.05), np.inf)
+            R[k] = np.minimum(r, lim)
+        if tent > 0:                                               # мостик через ложбинку: огибающая по y
+            from scipy.ndimage import gaussian_filter1d, maximum_filter1d
+            Rm = gaussian_filter1d(maximum_filter1d(R, size=5, axis=0), 1.5, axis=0)
+            R = R + (np.maximum(R, Rm) - R) * tent
+        from scipy.interpolate import RegularGridInterpolator
+        itp = RegularGridInterpolator((ys, phis), R, bounds_error=False, fill_value=None)
+
+        offv = off(zt)
+
+        def surf(y, ph):
+            # Точка наружной поверхности вещи: тело плюс отступ вдоль луча веера. Лучи расходятся из оси,
+            # поэтому сетка не складывается во впадинах (подъём по нормалям тела при отступе слоя 3 давал
+            # складки, и изнанка выходила наружу). Точный зазор потом добирает push_out.
+            y, ph = np.broadcast_arrays(np.asarray(y, float), np.asarray(ph, float))
+            r = itp(np.stack([np.clip(y, -ymax, ymax), ph], axis=-1)) + offv
+            return np.stack([x0 - r * np.cos(ph), y, z0 + r * np.sin(ph)], axis=-1)
+        # линия плеча: угол наибольшей высоты в плоскостях от выреза до плеча
+        pd = np.linspace(0.3, math.pi - 0.3, 80)
+        phi_top = lambda y: float(pd[surf(np.full(80, abs(y)), pd)[:, 2].argmax()])
+        phS = float(np.mean([phi_top(y) for y in np.linspace(yn, ytip, 5)]))
+        rS = float(itp([[yn, phS]])[0]) + offv
+        dF, dB = 22.0 / rS, 10.0 / rS                              # угол выреза чуть впереди и позади плеча
+        nrow = max(3, int(round((lm["shoulder_top_L"][2] - zt) * 1.25 / (row_step or ROW_STEP))))
+
+        def y_shoulder(j):
+            if j <= ns:
+                return sA * (ytip + (yn - ytip) * j / ns)
+            if j >= nf - ns:
+                return -sA * (yn + (ytip - yn) * (j - (nf - ns)) / ns)
+            return sA * yn * (1 - 2 * (j - ns) / (nf - 2 * ns))
+
+        def column(j, ph_a, ph_b, n):
+            """Точки колонки j от угла ph_a до ph_b, n отрезков, равномерно по длине."""
+            yF, yK, yS = ring[cf(j), 1], ring[cb(j), 1], y_shoulder(j)
+            ph = np.linspace(ph_a, ph_b, 40)
+            w = np.where(ph <= phS, smoothstep(ph / phS), smoothstep((math.pi - ph) / (math.pi - phS)))
+            y = np.where(ph <= phS, yF, yK) * (1 - w) + yS * w
+            return resample_open(surf(y, ph), n + 1)
+
+        def strap(j):
+            return np.vstack([column(j, 0.0, phS - dF, nrow)[:-1], column(j, phS - dF, phS, 1)[:-1],
+                              column(j, phS, phS + dB, 1)[:-1], column(j, phS + dB, math.pi, nrow)])
+        Rr = 2 * nrow + 2
+        cornerF = strap(ns)[nrow]
+        cornerB = strap(ns)[nrow + 2]
+        shape = dict(round=lambda c: math.sqrt(max(0.0, 1 - c * c)), v=lambda c: 1 - abs(c),
+                     square=lambda c: min(1.0, (1 - abs(c)) / 0.3), boat=lambda c: math.sqrt(max(0.0, 1 - c * c)),
+                     high=lambda c: math.sqrt(max(0.0, 1 - c * c)))[neck]
+
+        def neck_col(j, front):
+            c = 2 * (j - ns) / (nf - 2 * ns) - 1
+            if front:
+                zl = max(cornerF[2] - depth * shape(c), zt + 14.0)
+                ph = np.linspace(0.0, phS - dF, 60)
+            else:
+                zl = max(cornerB[2] - back_depth * math.sqrt(max(0.0, 1 - c * c)), zt + 14.0)
+                ph = np.linspace(math.pi, phS + dB, 60)
+            yE, yS = (ring[cf(j), 1] if front else ring[cb(j), 1]), y_shoulder(j)
+            w = smoothstep(ph / phS) if front else smoothstep((math.pi - ph) / (math.pi - phS))
+            P = surf(yE * (1 - w) + yS * w, ph)
+            k = int(np.argmax(P[:, 2] >= zl)) if (P[:, 2] >= zl).any() else len(P) - 1
+            k = max(k, 2)
+            return resample_open(P[: k + 1], nrow + 1)
+        S = {j: strap(j) for j in list(range(0, ns + 1)) + list(range(nf - ns, nf + 1))}
+        def lift(G):
+            return np.array(G, float)                 # отступ уже учтён в surf()
+        strapA = lift(np.stack([S[j] for j in range(0, ns + 1)], axis=0))
+        strapB = lift(np.stack([S[j] for j in range(nf - ns, nf + 1)], axis=0))
+        grids = {"strapA": strapA, "strapB": strapB}
+        if not open_front:
+            Fc = np.stack([S[ns][: nrow + 1]] + [neck_col(j, True) for j in range(ns + 1, nf - ns)]
+                          + [S[nf - ns][: nrow + 1]], axis=0)
+            grids["front"] = lift(Fc)
+        Bc = np.stack([S[ns][nrow + 2:][::-1]] + [neck_col(j, False) for j in range(ns + 1, nf - ns)]
+                      + [S[nf - ns][nrow + 2:][::-1]], axis=0)[:, ::-1]
+        grids["back"] = lift(Bc)
+        # общие колонки и стык с трубой: совпадение точек, плавный переход за 3 ряда
+        if "front" in grids:
+            grids["front"][0], grids["front"][-1] = strapA[-1, : nrow + 1], strapB[0, : nrow + 1]
+        grids["back"][0], grids["back"][-1] = strapA[-1, nrow + 2:], strapB[0, nrow + 2:]
+
+        def seat(G, cols, front, i0=0):
+            n = G.shape[1]
+            for jj, c in enumerate(cols):
+                target = ring[c]
+                if front:
+                    d = target - G[jj, 0]
+                    for i in range(min(4, n)):
+                        G[jj, i] += d * (1 - smoothstep(i / 3.0))
+                else:
+                    d = target - G[jj, n - 1]
+                    for i in range(min(4, n)):
+                        G[jj, n - 1 - i] += d * (1 - smoothstep(i / 3.0))
+        seat(strapA, [cf(j) for j in range(0, ns + 1)], True)
+        seat(strapA, [cb(j) for j in range(0, ns + 1)], False)
+        seat(strapB, [cf(j) for j in range(nf - ns, nf + 1)], True)
+        seat(strapB, [cb(j) for j in range(nf - ns, nf + 1)], False)
+        if "front" in grids:
+            seat(grids["front"], [cf(j) for j in range(ns, nf - ns + 1)], True)
+        seat(grids["back"], [cb(j) for j in range(ns, nf - ns + 1)], False)
+        def relax(G, head, tail, it=3):
+            """Сгладить ряды у стыка с трубой (вдоль колонок): без резкого излома, на котором нормали
+            вырождаются и изнанка совпадает с лицом."""
+            n = G.shape[1]
+            rows = [i for i in range(1, min(6, n - 1))] if head else []
+            rows += [i for i in range(max(n - 6, 1), n - 1)] if tail else []
+            for _ in range(it):
+                H = G.copy()
+                for i in rows:
+                    G[:, i] = (H[:, i - 1] + 2 * H[:, i] + H[:, i + 1]) / 4
+                    if G.shape[0] > 2:                             # и поперёк, кроме крайних колонок
+                        G[1:-1, i] = (G[1:-1, i] * 2 + H[:-2, i] + H[2:, i]) / 4
+        relax(strapA, True, True)
+        relax(strapB, True, True)
+        if "front" in grids:
+            relax(grids["front"], True, False)
+        relax(grids["back"], False, True)
+        for k in grids:
+            grids[k] = B.push_out(grids[k], offv - 0.3)
+        if "front" in grids:                                       # после выталкивания общие колонки снова совместить
+            grids["front"][0], grids["front"][-1] = grids["strapA"][-1, : nrow + 1], grids["strapB"][0, : nrow + 1]
+        grids["back"][0], grids["back"][-1] = grids["strapA"][-1, nrow + 2:], grids["strapB"][0, nrow + 2:]
+        for k, cols_, fr in (("strapA", [cf(j) for j in range(0, ns + 1)], True), ("strapB", [cf(j) for j in range(nf - ns, nf + 1)], True)):
+            grids[k][:, 0] = ring[cols_]
+        grids["strapA"][:, -1] = ring[[cb(j) for j in range(0, ns + 1)]]
+        grids["strapB"][:, -1] = ring[[cb(j) for j in range(nf - ns, nf + 1)]]
+        if "front" in grids:
+            grids["front"][:, 0] = ring[[cf(j) for j in range(ns, nf - ns + 1)]]
+        grids["back"][:, -1] = ring[[cb(j) for j in range(ns, nf - ns + 1)]]
+        # труба: при распашном переде середина переда вынимается
+        if open_front:
+            order = [(nu // 2 + hn + k) % nu for k in range(nu - 2 * hn + 1)]
+            tube = Patch(Gt[order], closed_u=False, name=name + "_body")
+        else:
+            tube = Patch(Gt, closed_u=True, name=name + "_body")
+        patches = [self._outward(tube)] + [self._outward(Patch(g, name=f"{name}_{k}")) for k, g in grids.items()]
+        sideA, sideB = ("R", "L") if sA > 0 else ("L", "R")
+        edges = dict(bottom=Gt[:, -1], top=ring)
+        edges["armhole_" + sideA] = np.vstack([grids["strapA"][0], ring[[(nq - a + k) % nu for k in range(1, 2 * a)]]])
+        edges["armhole_" + sideB] = np.vstack([grids["strapB"][-1][::-1], ring[[(3 * nq - a + k) % nu for k in range(1, 2 * a)]]])
+        nA, nB = grids["strapA"][-1, nrow: nrow + 3], grids["strapB"][0, nrow: nrow + 3]
+        if open_front:
+            fr = lambda g, col: np.vstack([Gt[col, ::-1], g[1: nrow + 1]])
+            lineA = np.vstack([fr(grids["strapA"][-1], (nu // 2 - hn) % nu), nA[1:]])
+            lineB = np.vstack([fr(grids["strapB"][0], (nu // 2 + hn) % nu), nB[1:]])
+            edges["neck"] = np.vstack([lineA, grids["back"][1:-1, 0], lineB[::-1]])      # открытая кромка: низ–шея–низ
+            edges["neck_closed"] = False
+        else:
+            edges["neck"] = np.vstack([grids["front"][:, -1], nB[1:], grids["back"][::-1, 0][1:], nA[::-1][1:-1]])
+            edges["neck_closed"] = True
+        joints = [("талия", (B.center_x(lm["waist"]), 0.0, lm["waist"]), (0, 0, 1), 30.0, 260.0)] if zb < lm["waist"] - 30 else []
+        pc = Piece(patches, t, edges, joints=joints, name=name)
+        pc.layer = layer
+        return pc
+
+    # ------------------------------------------------------------ трубы по конечностям
+    def _limb_tube(self, limb, loop, t_end, off, row_step, t0=None, n=None, name="tube", blend=4):
+        """Труба вдоль руки или ноги от кромки loop (или от параметра t0) до t_end. off(rel) — отступ
+        наружной поверхности от тела, rel = 0…1 вдоль трубы. Первый ряд совпадает с loop (сварится)."""
+        B = self.B
+        J = B.limb_axis(limb)
+        L = np.linalg.norm(J[1] - J[0]) + np.linalg.norm(J[2] - J[1])
+        kind = limb.split("_")[0]
+        if loop is not None:
+            loop = np.asarray(loop, float)
+            n = len(loop)
+            c = loop.mean(axis=0)
+            if t0 is None:
+                t0 = float(np.clip((c - J[0]) @ (J[1] - J[0]) / np.linalg.norm(J[1] - J[0]) / L, 0.02, 0.6))
+            p, d = B.limb_point(limb, t0)
+            ex, ey = B.limb_frame(limb, t0)
+            th = np.arctan2((loop - p) @ ey, (loop - p) @ ex)
+            k0 = int(np.abs(th).argmin())
+            loop, th = np.roll(loop, -k0, axis=0), np.roll(th, -k0)
+            th = np.unwrap(th)
+            if th[-1] < th[0]:                                    # кромка обходится в другую сторону — развернуть
+                loop = np.vstack([loop[:1], loop[1:][::-1]])
+                th = np.unwrap(np.arctan2((loop - p) @ ey, (loop - p) @ ex))
+            # углы строго возрастают и за полный обход набирают ровно 2π: кольца трубы не перекручиваются
+            dth = np.maximum(np.diff(np.concatenate([th, [th[0] + 2 * math.pi]])), 0.02)
+            th = th[0] + np.concatenate([[0.0], np.cumsum(dth)[:-1]]) * (2 * math.pi / dth.sum())
+        else:
+            th = np.arange(n) * 2 * math.pi / n
+        tm = B.lm["elbow_t"] if kind == "arm" else B.lm["knee_t"]
+        dense = [((tm - t0) / (t_end - t0), 0.07 / (t_end - t0), JOINT_DENSE)] if t0 + 0.08 < tm < t_end - 0.08 else []
+        sp = self._rows((t_end - t0) * L, row_step, dense)
+        ts = t0 + (t_end - t0) * sp
+        uni = th[0] + np.arange(n) * 2 * math.pi / n
+        rings = []
+        for k, (tt, rel) in enumerate(zip(ts, sp)):
+            w = smoothstep(k / float(blend)) if loop is not None else 1.0
+            rings.append(B.limb_ring(limb, tt, n, off(rel), thetas=th * (1 - w) + uni * w))
+        G = np.stack(rings, axis=1)
+        if loop is not None:
+            d0 = loop - G[:, 0]
+            for k in range(min(blend + 1, G.shape[1])):
+                G[:, k] += d0 * (1 - smoothstep(k / float(blend)))
+            cl = np.array([[off(r) for r in sp]] * n) - 0.3
+            cl[:, 0] = -1e9                                       # общий ряд не трогаем: он задан кромкой
+            G = B.push_out(G, cl)
+        else:
+            G = B.push_out(G, np.array([[off(r) for r in sp]] * n) - 0.3)
+        jn = "локоть" if kind == "arm" else "колено"
+        joints = []
+        if t0 + 0.05 < tm < t_end - 0.05:
+            pj, dj = B.limb_point(limb, tm)
+            joints.append((f"{jn} {limb[-1]}", tuple(pj), tuple(dj), 0.07 * L, 120.0))
+        return self._outward(Patch(G, closed_u=True, name=name)), joints, ts
+
+    def sleeve(self, top, side, length=1.0, kind="straight", ease=3.0, amount=35.0, t=None, row_step=None,
+               name=None):
+        """Рукав от проймы лифа top (Piece от bodice) вдоль руки до параметра length (1.0 — запястье,
+        lm["elbow_t"] — локоть, 0.25 — короткий). kind: "straight" — втачной прямой; "flare" — расширяется
+        книзу на amount мм; "bell" — раструб от локтя; "puff" — фонарик (объём amount, низ собран);
+        "cap" — крылышко (короткий, length ≈ 0.15, расклёшен). Кромка: end."""
+        t = top.t if t is None else t
+        layer = getattr(top, "layer", 1)
+        base = self.gap(layer, t) + ease
+        prof = dict(straight=lambda r: 0.0, flare=lambda r: amount * r ** 1.6,
+                    bell=lambda r: amount * float(smoothstep((r - 0.45) / 0.55)),
+                    puff=lambda r: amount * math.sin(math.pi * min(1.0, r) ** 0.85) ** 0.9,
+                    cap=lambda r: amount * r)[kind]
+        name = name or f"sleeve_{side}"
+        p, joints, _ = self._limb_tube(f"arm_{side}", top.edges[f"armhole_{side}"], length,
+                                       lambda r: base + prof(r), row_step, name=name)
+        pc = Piece([p], t, dict(end=p.G[:, -1]), joints=joints, name=name)
+        pc.layer = layer
+        pc.limb = f"arm_{side}"
+        return pc
+
+    def stocking(self, side, top=0.3, bottom=0.97, layer=1, ease=0.0, t=0.8, cols=20, row_step=None, name=None):
+        """Чулок, гольф, гетра: оболочка ноги между параметрами top и bottom (0 — тазобедренный сустав,
+        lm["knee_t"] — колено, 1 — щиколотка). Кромки: top, end."""
+        name = name or f"stocking_{side}"
+        off = self.gap(layer, t) + ease
+        p, joints, _ = self._limb_tube(f"leg_{side}", None, bottom, lambda r: off, row_step, t0=top, n=cols, name=name)
+        pc = Piece([p], t, dict(top=p.G[:, 0], end=p.G[:, -1]), joints=joints, name=name)
+        pc.layer, pc.limb = layer, f"leg_{side}"
+        return pc
+
+    def glove(self, side, top=0.55, bottom=0.99, layer=1, ease=0.0, t=0.8, cols=16, row_step=None, name=None):
+        """Нарукавник / манжета-перчатка без кисти: оболочка руки между параметрами top и bottom."""
+        name = name or f"armband_{side}"
+        off = self.gap(layer, t) + ease
+        p, joints, _ = self._limb_tube(f"arm_{side}", None, bottom, lambda r: off, row_step, t0=top, n=cols, name=name)
+        pc = Piece([p], t, dict(top=p.G[:, 0], end=p.G[:, -1]), joints=joints, name=name)
+        pc.layer, pc.limb = layer, f"arm_{side}"
+        return pc
+
+    # ------------------------------------------------------------ низ: юбка
+    def skirt(self, waist="waist", length=420.0, kind="a", flare=None, layer=2, ease=2.0, t=1.2, cols=None,
+              row_step=None, pleats=0, pleat_depth=14.0, top=None, name="skirt"):
+        """Юбка: кольца от талии вниз. kind: "straight" — прямая, "a" — А-силуэт, "bell" — колокол,
+        "circle" — солнце; flare — вынос подола наружу относительно талии, мм (по умолчанию от kind).
+        pleats — число складок геометрией (cols должно делиться на 2·pleats), pleat_depth — их глубина.
+        top — Piece лифа: верх юбки совпадёт с его кромкой bottom (платье одной деталью).
+        Кромки: waist, hem. Юбка нигде не ближе к телу, чем отступ слоя: бёдра раздвигают её сами."""
+        B, lm = self.B, self.B.lm
+        nu = cols or self.cols
+        if pleats and nu % (2 * pleats):
+            raise ValueError(f"skirt: cols={nu} должно делиться на 2·pleats={2 * pleats}")
+        zw = self.z(waist) if top is None else float(np.mean(top.edges["bottom"][:, 2]))
+        fl = flare if flare is not None else dict(straight=10.0, a=0.30 * length, bell=0.42 * length,
+                                                  circle=0.75 * length)[kind]
+        f = dict(straight=lambda s: s, a=lambda s: s, bell=lambda s: math.sin(math.pi / 2 * s) ** 0.75,
+                 circle=lambda s: s ** 0.9)[kind]
+        sp = self._rows(length, row_step, [(0.0, 0.08, 1.5)])
+        zs = zw - length * sp
+        o = (B.center_x(zw), 0.0)
+        gp = self.gap(layer, t) + ease
+        th = np.arange(nu) * 2 * math.pi / nu
+        dirs = np.stack([np.cos(th), -np.sin(th)], axis=1)          # обход для сетки сверху вниз
+        rb = np.zeros((nu, len(zs)))
+        for j, z in enumerate(zs):
+            zz = max(z, lm["knee"] * 0.5)
+            te = 1.0 if zz < lm["crotch"] + 40 else 0.5
+            rb[:, j] = B.ring((o[0], o[1], zz), (0, 0, -1), (1, 0, 0), nu, ("torso", "leg_L", "leg_R"), "far", te, 1.0)[1]
+        rw = rb[:, 0] + gp
+        if top is not None:
+            tr = np.asarray(top.edges["bottom"], float)
+            rw = np.linalg.norm(tr[:, :2] - np.array(o), axis=1)
+        r = np.zeros_like(rb)
+        for j, s in enumerate(sp):
+            des = rw + fl * f(s)
+            need = rb[:, j] + gp
+            k = 10.0
+            r[:, j] = des + k * np.log1p(np.exp(np.clip((need - des) / k, -30, 30)))      # мягкий максимум
+            r[:, j] = _smooth_circular(r[:, j], 1.2)
+            r[:, j] = np.maximum(r[:, j], need)
+            if pleats:
+                saw = np.abs(((th * pleats / (2 * math.pi)) % 1.0) * 2 - 1)               # 1…0…1 на складку
+                r[:, j] += pleat_depth * (0.5 - saw) * 2 * float(smoothstep((s - 0.08) / 0.5))
+        G = np.stack([np.stack([o[0] + r[:, j] * dirs[:, 0], o[1] + r[:, j] * dirs[:, 1], np.full(nu, z)], axis=1)
+                      for j, z in enumerate(zs)], axis=1)
+        if top is not None:                                          # верх юбки = низ лифа (общий ряд)
+            d0 = tr - G[:, 0]
+            for k in range(min(4, G.shape[1])):
+                G[:, k] += d0 * (1 - smoothstep(k / 3.0))
+        G = B.push_out(G, LAYER_GAP[layer] + t - 0.3)
+        if top is not None:
+            G[:, 0] = tr
+        p = self._outward(Patch(G, closed_u=True, name=name))
+        pc = Piece([p], t, dict(waist=p.G[:, 0], hem=p.G[:, -1]), name=name)
+        pc.layer = layer
+        pc.regions = ("torso",)                      # юбка берёт веса только с туловища: ноги её не растягивают
+        # Динамика подола по умолчанию: цепочки сидят на тазе и начинаются у линии бёдер — выше юбка идёт
+        # за телом (пояс гнётся вместе с талией), ниже — за костями с пружиной. Радиус столкновения большой:
+        # цепочка между бёдрами ложится на них, а не проваливается.
+        pc.dyn_defaults = dict(parent="hips", v0=float(np.clip((zw - lm["hips"]) * 0.4 / length, 0.08, 0.5)),
+                               radius=30.0, chains=12, bones=4, follow=0.9)
+        return pc
+
+    # ------------------------------------------------------------ низ: брюки, шорты, леггинсы
+    def pants(self, waist="waist", length=1.0, layer=1, ease=1.0, leg_ease=None, flare=0.0, t=1.0, cols=None,
+              row_step=None, name="pants"):
+        """Брюки, шорты, леггинсы: труба таза от талии до паха, шаговый мостик и две штанины вдоль ног
+        до параметра length (0.2 — шорты, lm["knee_t"] — до колена, 0.97 — до щиколотки).
+        leg_ease — свобода штанины (по умолчанию как ease), flare — расклёш к низу, мм. Кромки: waist, end_L, end_R."""
+        B, lm = self.B, self.B.lm
+        nu = cols or self.cols
+        if nu % 4:
+            raise ValueError("pants: cols должно быть кратно 4")
+        zw, zc = self.z(waist), lm["crotch"] + 22.0
+        off = self.gap(layer, t) + ease
+        dense = [((zw - lm["hips"]) / (zw - zc), 0.12, 1.4)]
+        zs = zw + (zc - zw) * self._rows(zw - zc, row_step, dense)
+        G = B.torso_grid(zs, nu, offset=off, tent=0.35, smooth=1.0)
+        G = B.push_out(G, off - 0.3)
+        ring = G[:, -1]
+        # шаговый мостик: от середины переда под пахом к середине спины, в плоскости y = 0
+        nc = max(4, int(round(nu * 0.17)) // 2 * 2)
+        x0 = B.center_x(zc)
+        ph = np.linspace(0, math.pi, 41)
+        Pb, rbr = B.ring((x0, 0.0, zc), (0, -1, 0), (-1, 0, 0), thetas=ph, mode="near", regions=("torso", "leg_L", "leg_R"))
+        rbr = np.minimum(rbr, np.median(rbr) * 1.6) + off
+        Pb = np.stack([x0 - rbr * np.cos(ph), np.zeros_like(ph), zc - rbr * np.sin(ph)], axis=1)
+        Pb[0], Pb[-1] = ring[nu // 2], ring[0]
+        bridge = resample_open(Pb, nc + 1)
+        bridge[:, 1] = 0.0
+        y_first = ring[nu // 4, 1]
+        sideA, sideB = ("R", "L") if y_first > 0 else ("L", "R")
+        loopA = np.vstack([ring[0: nu // 2 + 1], bridge[1:-1]])                      # спина → бок A → перёд → мостик
+        loopB = np.vstack([ring[nu // 2:], ring[:1], bridge[::-1][1:-1]])
+        le = self.gap(layer, t) + (ease if leg_ease is None else leg_ease)
+        patches = [self._outward(Patch(G, closed_u=True, name=name + "_hip"))]
+        edges, joints = dict(waist=G[:, 0]), []
+        for side, loop in ((sideA, loopA), (sideB, loopB)):
+            p, jn, _ = self._limb_tube(f"leg_{side}", loop, length, lambda r: le + flare * r ** 1.5, row_step,
+                                       name=f"{name}_leg_{side}", blend=5)
+            patches.append(p)
+            joints += jn
+            edges["end_" + side] = p.G[:, -1]
+        if zw > lm["waist"] - 5:
+            joints.append(("бёдра", (B.center_x(lm["hips"]), 0.0, lm["hips"]), (0, 0, 1), 35.0, 300.0))
+        pc = Piece(patches, t, edges, joints=joints, name=name)
+        pc.layer = layer
+        return pc
+
+    # ------------------------------------------------------------ полосы вдоль кромок
+    def band(self, loop, profile, closed=True, up=(0, 0, 1), t=1.2, wave=None, name="band", taper=0, fit=None,
+             fit_from=0):
+        """Полоса вдоль кромки: воротник, манжета, оборка, подгиб. loop — точки кромки (n, 3) из
+        Piece.edges; profile — сечение полосы [(наружу, вверх), ...] в мм от кромки; closed — кромка
+        замкнута. up — куда «вверх» у сечения (для манжеты — вдоль руки). wave=(амплитуда, число волн) —
+        волна по краю (оборка, рюш). taper — на скольких точках у концов открытой кромки полоса сходит на нет."""
+        L = np.asarray(loop, float)
+        n = len(L)
+        if closed:
+            T = np.roll(L, -1, axis=0) - np.roll(L, 1, axis=0)
+        else:
+            T = np.gradient(L, axis=0)
+        T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-12)
+        if up is None:                                             # «вверх» — по нормали плоскости кромки
+            c = L.mean(axis=0)
+            _, _, vt = np.linalg.svd(L - c)
+            up = vt[2]
+        U = np.broadcast_to(np.asarray(up, float), (n, 3)).copy()
+        U -= T * (U * T).sum(axis=1, keepdims=True)
+        U /= np.maximum(np.linalg.norm(U, axis=1, keepdims=True), 1e-12)
+        O = np.cross(T, U)
+        h = self.B.closest(L)
+        sg = np.sign((O * (L - h["point"])).sum(axis=1).sum()) or 1.0      # «наружу» — от тела
+        O = O * sg
+        pr = np.asarray(profile, float)
+        k = np.ones(n)
+        if taper and not closed:
+            k = np.minimum(np.minimum(np.arange(n), np.arange(n)[::-1]) / float(taper), 1.0)
+            k = smoothstep(k) * 0.92 + 0.08
+        G = L[None] + pr[:, :1, None] * (O * k[:, None])[None] + pr[:, 1:, None] * (U * k[:, None])[None]
+        if wave:
+            amp, cnt = wave
+            s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(L, axis=0), axis=1))])
+            s = s / (s[-1] + (np.linalg.norm(L[0] - L[-1]) if closed else 0.0))
+            w = np.sin(2 * math.pi * cnt * s)
+            fr = np.linspace(0, 1, len(pr)) ** 1.3
+            G = G + (amp * fr)[:, None, None] * w[None, :, None] * O[None]
+        if fit is not None:                                        # полоса не входит в тело: зазор fit мм
+            cl = np.full(G.shape[:2], float(fit))
+            cl[: fit_from] = -1e9                                  # ряды у кромки не трогаем: они сидят на вещи
+            G = self.B.push_out(G, cl, cells=False)
+        p = self._outward(Patch(G, closed_v=closed, name=name))
+        return Piece([p], t, dict(edge=p.G[-1] if p.G.shape[0] else None, outer=G[-1]), name=name)
+
+    def collar(self, top, kind="stand", height=28.0, width=None, t=1.2, name="collar"):
+        """Воротник по вырезу лифа: "stand" — стойка, "turndown" — отложной (стойка + отлёт шириной width),
+        "flat" — плоский (лежит на плечах), "ruffle" — оборка по вырезу."""
+        loop, closed = top.edges["neck"], top.edges.get("neck_closed", True)
+        loop = smooth_line(loop, closed, step=11.0)
+        w = width or height * 1.4
+        prof = dict(
+            stand=[(0.8, -2.0), (0.6, height * 0.33), (0.2, height * 0.67), (-0.6, height)],
+            turndown=[(0.8, -2.0), (-1.5, height * 0.5), (-2.0, height * 0.85), (1.5, height * 1.0),
+                      (w * 0.5, height * 0.62), (w * 0.85, height * 0.1), (w, -height * 0.3)],
+            flat=[(0.0, 1.5), (w * 0.35, 3.5), (w * 0.7, 2.5), (w, 0.5)],
+            ruffle=[(0.0, 1.0), (w * 0.3, 5.0), (w * 0.65, 6.0), (w, 3.0)])[kind]
+        fit = float(self.B.closest(loop)["dist"].max()) + t + 0.8        # воротник лежит поверх лифа, не в нём
+        pc = self.band(loop, prof, closed=closed, t=t, name=name, wave=(w * 0.16, max(6, len(loop) // 5)) if kind == "ruffle" else None,
+                       taper=0 if closed else 5, fit=LAYER_GAP[1] + t if kind == "stand" else fit,
+                       fit_from=1 if kind == "stand" else len(prof) // 2)      # стойка садится по шее, отлёт — поверх лифа
+        pc.layer = getattr(top, "layer", 1) + 1
+        return pc
+
+    def cuff(self, piece, width=30.0, flare=3.0, t=1.4, edge="end", kind="band", name=None):
+        """Манжета по кромке рукава или штанины: "band" — лента поверх края, "turnback" — отворот,
+        "ruffle" — оборка наружу."""
+        loop = piece.edges[edge]
+        limb = getattr(piece, "limb", None)
+        if limb is not None:
+            J = self.B.limb_axis(limb)
+            up = (J[1] - J[2]) / np.linalg.norm(J[1] - J[2])       # к корню конечности
+        else:
+            up = np.array([0.0, 0.0, 1.0])
+        prof = dict(band=[(1.2, 6.0), (2.2 + flare * 0.3, 0.0), (2.4 + flare * 0.6, -width * 0.5), (2.0 + flare, -width)],
+                    turnback=[(1.5, -width * 0.6), (3.0, -width), (5.0 + flare, -width * 0.5), (5.5 + flare, 2.0)],
+                    ruffle=[(0.5, 4.0), (4.0, -width * 0.35), (9.0, -width * 0.7), (16.0, -width)])[kind]
+        pc = self.band(loop, prof, closed=True, up=up, t=t, name=name or f"cuff_{piece.name}",
+                       wave=(width * 0.18, max(5, len(loop) // 4)) if kind == "ruffle" else None,
+                       fit=LAYER_GAP[min(getattr(piece, "layer", 1) + 1, 4)] + t)
+        pc.layer = getattr(piece, "layer", 1) + 1
+        return pc
+
+    def hem_band(self, piece, width=24.0, edge="hem", out=2.0, t=1.4, kind="band", name=None):
+        """Полоса по низу юбки или лифа: "band" — подгиб/кайма, "ruffle" — оборка вниз."""
+        loop = piece.edges[edge]
+        prof = dict(band=[(out, 3.0), (out + 0.5, -width * 0.5), (out, -width)],
+                    ruffle=[(0.5, 3.0), (3.0, -width * 0.35), (7.0, -width * 0.7), (12.0, -width)])[kind]
+        pc = self.band(loop, prof, closed=True, t=t, name=name or f"hem_{piece.name}",
+                       wave=(width * 0.22, max(8, len(loop) // 4)) if kind == "ruffle" else None)
+        pc.layer = getattr(piece, "layer", 1)
+        return pc
+
+    def piping(self, loop, r=2.2, closed=True, name="piping", sides=6):
+        """Кант: круглый шнур вдоль кромки (замкнутое тело)."""
+        a = np.arange(sides) * 2 * math.pi / sides
+        L = np.asarray(loop, float)
+        m = quad_sweep(np.stack([r * np.cos(a), r * np.sin(a)], axis=1), L, up=(0, 0, 1) if closed else None,
+                       closed_path=closed, name=name)
+        return Piece(solid=m, name=name)
+
+    # ------------------------------------------------------------ пояс, пряжка, пуговицы, шнуровка
+    def waist_ring(self, z="waist", layer=3, extra=0.0, n=None, tent=0.6):
+        """Кольцо вокруг туловища на высоте z с отступом слоя (ось пояса, линия для пуговиц)."""
+        return self.B.torso_ring(self.z(z), n or self.cols, LAYER_GAP[layer] + extra, tent, 1.5, down=True)
+
+    def push_over(self, G, pieces, clear=2.0, iters=3):
+        """Отодвинуть точки сетки G от наружной поверхности вещей pieces до зазора clear мм: накладная
+        деталь (лента, бант, карман) ложится на одежду под ней, а не на тело."""
+        from .body import Surface
+        m = QuadMesh.from_patches([q for pc in pieces for q in pc.patches])
+        S = Surface(m.V, m.triangles())
+        G = np.array(G, float)
+        P = G.reshape(-1, 3)
+        for _ in range(iters):
+            h = S.closest(P, k=8)
+            lack = clear - h["dist"]
+            mk = (lack > 1e-3) & (h["dist"] > -40.0)
+            if not mk.any():
+                break
+            P[mk] += h["normal"][mk] * lack[mk][:, None]
+        return P.reshape(G.shape)
+
+    def over_radius(self, pieces, z, n, origin):
+        """Радиус наружной поверхности вещей pieces на высоте z по n лучам из оси origin (x, y) —
+        чтобы пояс и накладные детали садились на одежду под ними, а не на тело. NaN — луч не попал."""
+        from .body import plane_segments, _ray_segments
+        th = np.arange(n) * 2 * math.pi / n
+        dirs = np.stack([np.cos(th), -np.sin(th)], axis=1)
+        A, Bq = [], []
+        for pc in pieces:
+            for P in pc.patches:
+                m = QuadMesh.from_patches([P])
+                S = plane_segments(m.V, m.triangles(), (0, 0, z), (0, 0, 1))
+                if len(S):
+                    A.append(S[:, 0, :2] - np.array(origin))
+                    Bq.append(S[:, 1, :2] - np.array(origin))
+        if not A:
+            return np.full(n, np.nan)
+        return _ray_segments(dirs, np.vstack(A), np.vstack(Bq), "far")
+
+    def belt(self, z="waist", width=28.0, thick=3.0, layer=3, over=(), tent=0.6, rows=3, name="belt", gap=1.2):
+        """Пояс: лента шириной width и толщиной thick вокруг туловища на высоте z. over — блоки одежды под
+        поясом (юбка, лиф): пояс ложится на них с зазором, а не режет их. Кромка front — точка для пряжки."""
+        B = self.B
+        zc = self.z(z)
+        nu = self.cols
+        o = (B.center_x(zc), 0.0)
+        th = np.arange(nu) * 2 * math.pi / nu
+        dirs = np.stack([np.cos(th), -np.sin(th)], axis=1)
+        rings = []
+        for zz in np.linspace(zc + width / 2, zc - width / 2, rows):
+            r = B.ring((o[0], o[1], zz), (0, 0, -1), (1, 0, 0), nu, ("torso", "leg_L", "leg_R"), "far", tent, 1.5)[1]
+            r = r + LAYER_GAP[layer]
+            if over:
+                ro = self.over_radius(over, zz, nu, o)
+                r = np.where(np.isfinite(ro), np.maximum(r, ro + gap), r)      # gap — зазор над вещами под поясом
+            r = _smooth_circular(r, 1.0) + thick
+            rings.append(np.stack([o[0] + r * dirs[:, 0], o[1] + r * dirs[:, 1], np.full(nu, zz)], axis=1))
+        G = np.stack(rings, axis=1)
+        p = self._outward(Patch(G, closed_u=True, name=name))
+        mid = G[:, rows // 2]
+        pc = Piece([p], thick, dict(ring=mid, front=mid[int(mid[:, 0].argmin())]), name=name)
+        pc.layer = layer
+        return pc
+
+    def front_point(self, z, layer=2, extra=0.0, y=0.0):
+        """Точка на переде туловища (на отступе слоя) на высоте z, со смещением y от середины."""
+        ring = self.B.torso_ring(self.z(z), 96, LAYER_GAP[layer] + extra, 0.5, 1.0)
+        front = ring[ring[:, 0] < self.B.center_x(self.z(z))]
+        return front[np.abs(front[:, 1] - y).argmin()].copy()
+
+    def buckle(self, center, w=44.0, h=36.0, d=5.0, bar=5.0):
+        """Пряжка-рамка — жёсткая деталь (тело build123d, mesh="cad"): рамка w × h толщиной d, перёд в −X.
+        Привязывается к одной кости: O.M.add(..., bind="hips")."""
+        from .kit import box, cut
+        x, y, z = center
+        frame = cut(box(x - d, y - w / 2, z - h / 2, x + 1.0, y + w / 2, z + h / 2, r=3),
+                    box(x - d - 1, y - w / 2 + bar, z - h / 2 + bar, x + 2.0, y + w / 2 - bar, z + h / 2 - bar, r=1.5))
+        prong = box(x - d - 0.5, y - 1.6, z - h / 2 + 1, x - d + 2.0, y + 1.6, z + h / 2 - 1)
+        return frame + prong
+
+    def button(self, center, normal=(-1, 0, 0), r=7.0, h=3.0, name="button", n=12):
+        """Пуговица — диск (тело вращения квадами) с осью по normal."""
+        prof = [(0, 0), (r * 0.7, 0), (r, h * 0.4), (r * 0.8, h), (0, h)]
+        m = revolve_quad(prof, center, axis=normal, n=n, name=name)
+        return Piece(solid=m, name=name)
+
+    def buttons(self, z_top, z_bottom, count, layer=2, extra=1.0, y=0.0, r=7.0, name="button"):
+        """Ряд пуговиц по переду от высоты z_top до z_bottom."""
+        out = None
+        for k, z in enumerate(np.linspace(self.z(z_top), self.z(z_bottom), count)):
+            p = self.front_point(z, layer, extra, y)
+            h = self.B.closest(p[None])
+            nrm = h["normal"][0]
+            b = self.button(p, nrm, r, name=f"{name}{k}").solid
+            out = b if out is None else out.merged(b)
+        return Piece(solid=out, name=name)
+
+    def lacing(self, z_top, z_bottom, count, half_width=22.0, layer=2, extra=1.5, r=1.6, back=False, name="lace"):
+        """Шнуровка крест-накрест между двумя рядами точек по переду (или по спине)."""
+        zs = np.linspace(self.z(z_top), self.z(z_bottom), count)
+        out = None
+        a = np.arange(6) * 2 * math.pi / 6
+        prof = np.stack([r * np.cos(a), r * np.sin(a)], axis=1)
+
+        def pt(z, y):
+            if back:
+                ring = self.B.torso_ring(z, 96, LAYER_GAP[layer] + extra, 0.5, 1.0)
+                bk = ring[ring[:, 0] > self.B.center_x(z)]
+                return bk[np.abs(bk[:, 1] - y).argmin()].copy()
+            return self.front_point(z, layer, extra, y)
+        for k in range(count - 1):
+            for s in (1.0, -1.0):
+                p0, p1 = pt(zs[k], s * half_width), pt(zs[k + 1], -s * half_width)
+                mid = (p0 + p1) / 2
+                hmid = self.B.closest(mid[None])
+                mid = mid + hmid["normal"][0] * (r * (2.2 if s > 0 else 0.6))         # шнуры не пересекаются
+                seg = quad_sweep(prof, resample_open(np.array([p0, mid, p1]), 5), name=f"{name}{k}")
+                out = seg if out is None else out.merged(seg)
+        return Piece(solid=out, name=name)
+
+    # ------------------------------------------------------------ ленты и банты
+    def ribbon(self, path, width=22.0, t=0.8, normal=None, taper=0.75, rows=None, name="ribbon", clear=9.0, over=()):
+        """Лента вдоль ломаной path (n, 3): полоса шириной width. normal — куда смотрит лицевая сторона
+        (по умолчанию от тела); taper — ширина на конце относительно начала. Сетка идёт вдоль ленты (v),
+        поэтому динамика задаётся одной цепочкой: dynamics=dict(preset="soft", chains=1, bones=3)."""
+        P = resample_open(np.asarray(path, float), rows or max(4, int(np.linalg.norm(np.diff(path, axis=0), axis=1).sum() / 18) + 1))
+        n = len(P)
+        T = np.gradient(P, axis=0)
+        T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-12)
+        if normal is None:
+            h = self.B.closest(P)
+            N = P - h["point"]
+        else:
+            N = np.broadcast_to(np.asarray(normal, float), (n, 3)).copy()
+        N -= T * (N * T).sum(axis=1, keepdims=True)
+        N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+        S = np.cross(T, N)
+        wd = width / 2 * np.linspace(1.0, taper, n)
+        G = np.stack([P - S * wd[:, None], P, P + S * wd[:, None]], axis=0)
+        if clear is not None:                                      # лента не входит в тело: зазор clear мм
+            G = self.B.push_out(G, clear + t, cells=False)
+        if over:                                                   # и не входит в одежду под ней
+            G = self.push_over(G, over, clear=t + 1.5)
+        p = Patch(G, name=name)
+        if (p.normals()[1, n // 2] @ N[n // 2]) < 0:
+            p = Patch(G[::-1], name=name)
+        return Piece([p], t, dict(end=G[:, -1]), name=name)
+
+    def bow(self, center, normal=(-1, 0, 0), size=90.0, width=None, t=1.0, tails=110.0, droop=0.25, name="bow", over=()):
+        """Бант: две петли и узел (жёсткая часть) и два хвоста-ленты (для динамики). normal — куда смотрит
+        бант. Возвращает (Piece петель и узла, [Piece хвост, Piece хвост]): хвосты добавляются отдельной
+        деталью с dynamics, петли — с bind к кости."""
+        c = np.asarray(center, float)
+        nrm = np.asarray(normal, float)
+        nrm /= np.linalg.norm(nrm)
+        upv = np.array([0.0, 0.0, 1.0])
+        side = np.cross(upv, nrm)
+        side /= np.linalg.norm(side)
+        upv = np.cross(nrm, side)
+        w = width or size * 0.42
+        loops = []
+        for sg in (1.0, -1.0):
+            a = np.linspace(0, 2 * math.pi, 14, endpoint=False)
+            # петля — «капля» в плоскости (side, normal): от узла наружу и обратно
+            rx = 3.0 + size * 0.25 * (1 - np.cos(a))               # от узла наружу и обратно
+            ry = size * 0.13 * (1 + np.sin(a)) + 2.0                # петля выпуклая только наружу от тела
+            path = c + sg * side[None] * rx[:, None] + nrm[None] * ry[:, None] - upv[None] * (droop * rx[:, None] * 0.35)
+            prof = np.stack([np.zeros(3), np.array([-w / 2, 0.0, w / 2])], axis=1)
+            T = np.roll(path, -1, axis=0) - np.roll(path, 1, axis=0)
+            T /= np.linalg.norm(T, axis=1, keepdims=True)
+            wscale = 0.55 + 0.45 * np.sin(a / 2)                   # у узла петля уже
+            G = np.stack([path + upv[None] * (v * wscale)[:, None] for v in prof[:, 1]], axis=0)
+            loops.append(Patch(G, closed_v=True, name=f"{name}_loop{'L' if sg > 0 else 'R'}"))
+        knot = revolve_quad([(0, -1), (0.7, -0.75), (1, 0), (0.7, 0.75), (0, 1)], (0, 0, 0), axis=(0, 0, 1), n=10,
+                            name=name + "_knot")
+        knot = knot.transformed(lambda P: c + nrm * 4.0 + P[:, :1] * side * w * 0.26 + P[:, 1:2] * nrm * w * 0.24
+                                + P[:, 2:] * upv * w * 0.34)
+        _fix_outward(knot)
+        body_ = QuadMesh.from_patches(loops).solidify(t)
+        pc = Piece(solid=body_.merged(knot), name=name)
+        tl = []
+        for sg in (1.0, -1.0):
+            p0 = c + nrm * 2.0 - upv * w * 0.2 + sg * side * w * 0.22
+            p1 = p0 - upv * tails * 0.55 + sg * side * tails * 0.28 + nrm * 4.0
+            p2 = p0 - upv * tails + sg * side * tails * 0.36 + nrm * 2.0
+            tl.append(self.ribbon(np.array([p0, p1, p2]), width=w * 0.8, t=t, normal=nrm, taper=1.15,
+                                  name=f"{name}_tail{'L' if sg > 0 else 'R'}", over=over))
+        return pc, tl
+
+    # ------------------------------------------------------------ обувь
+    def shoe(self, side, shaft=0.9, layer=2, ease=2.5, t=2.0, sole=6.0, cols=20, name=None):
+        """Простая обувь — ботинок: одна труба от голенища (параметр ноги shaft; 0.9 — чуть выше щиколотки,
+        0.6 — сапог до середины голени) через изгиб у щиколотки до закрытого носка, с плоской подошвой.
+        Верх открыт (нога входит в ботинок), толщина t. Привязка — по весам ноги: щиколотка гнётся."""
+        from .body import plane_segments
+        B = self.B
+        name = name or f"shoe_{side}"
+        limb = f"leg_{side}"
+        reg = (limb,)
+        mask = B.tri_mask(reg)
+        ank = B.joint(f"foot_{side}")
+        sg = -1.0 if side == "L" else 1.0
+        fv = B.V[(B.vreg == ["torso", "head", "arm_L", "arm_R", "leg_L", "leg_R"].index(limb)) & (B.V[:, 2] < ank[2] * 0.9)]
+        x_toe = float(fv[:, 0].min())
+        off = self.gap(layer, t) + ease
+        zp = float(ank[2] + 28.0)
+        front = fv[np.abs(fv[:, 2] - min(ank[2] * 0.85, fv[:, 2].max())) < 12.0]
+        pivot = np.array([float(front[:, 0].min()) - 44.0, float(np.median(fv[:, 1])), zp])     # перед подъёмом стопы
+
+        def ring_at(origin, n):
+            S = plane_segments(B.V, B.T[mask], origin, n).reshape(-1, 3)
+            S = S[np.linalg.norm(S - ank, axis=1) < 260.0]
+            c = S.mean(axis=0)
+            c = c - n * ((c - origin) @ n)
+            return B.ring(c, n, (0.0, sg, 0.0), cols, reg, "far", 1.0, 1.0, off, rmax=130.0)[0]
+        ptop, _ = B.limb_point(limb, shaft)
+        rings = []
+        for z in np.linspace(ptop[2], zp, max(3, int((ptop[2] - zp) / 16.0) + 2)):             # голенище
+            rings.append(ring_at(np.array([ank[0], ank[1], z]), np.array([0.0, 0.0, -1.0])))
+        for ph in np.radians([22.5, 45, 67.5, 90]):                                            # изгиб: веер плоскостей
+            rings.append(ring_at(pivot, np.array([-math.sin(ph), 0.0, -math.cos(ph)])))
+        xs = pivot[0] + (x_toe - pivot[0]) * spacing(7, [(1.0, 0.15, 1.5)])[1:]
+        for x in xs[:-1]:                                                                      # стопа до носка
+            rings.append(ring_at(np.array([x, pivot[1], 10.0]), np.array([-1.0, 0.0, 0.0])))
+        last = rings[-1]
+        c = last.mean(axis=0)
+        for k, dx in ((0.8, 0.5), (0.45, 0.9)):                                                # закруглить носок
+            q = c + (last - c) * k
+            q[:, 0] = last[:, 0] + (x_toe - off * 0.2 - last[:, 0].mean()) * dx
+            rings.append(q)
+        G = np.stack(rings, axis=1)
+        G = B.push_out(G, off - 0.2)
+        low = G[..., 2] < 7.0                                                                  # низ — плоская подошва
+        G[..., 2] = np.where(low, -sole, G[..., 2])
+        tip = G[:, -1].mean(axis=0)
+        tip[0] = x_toe - off                                                                   # полюс носка: веер треугольников
+        G = np.concatenate([G, np.repeat(tip[None, None, :], cols, axis=0)], axis=1)
+        tube = self._outward(Patch(G, closed_u=True, name=name))
+        m = QuadMesh.from_patches([tube])
+        pc = Piece(solid=m.solidify(t), edges=dict(top=tube.G[:, 0]), name=name)
+        pc.layer, pc.limb = layer, limb
+        return pc

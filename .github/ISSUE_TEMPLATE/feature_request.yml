@@ -1,0 +1,14 @@
+name: Idea or improvement
+description: A new feature, garment block, geometry tool, platform or doc improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you want to make possible
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How you would approach it (optional)
