@@ -140,13 +140,13 @@
 - Константы: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` мм, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, пресеты `DYNAMICS = {stiff, soft, rigid}` (жёсткость, затухание, гравитация, радиус).
 - `Piece(patches, t, edges, solid, joints, name)` — сетки внешней поверхности с именованными краями, к которым крепятся другие блоки; суставы — для проверки петель у суставов.
 - `Outfit(model, body, cols=48)` — выставляет `model.body`, добавляет тело как деталь `phantom`; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` сваривает куски в одну квадовую деталь с толщиной и заполняет `info` (зазор, суставы, области, подкладка).
-- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`; помощники `waist_ring`, `push_over`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
+- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`; помощники `waist_ring`, `push_over`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
 
 ## `rig.py`
 
 **Отвечает за:** привязку одежды к скелету. **Хешируется для спецификаций одежды.**
 
-- `Rig(model)` — расширяет скелет тела костями с пружиной, вычисляет веса для каждой квадовой детали, жёсткую привязку для `bind="<bone or role>"` и CAD-деталей, коллайдеры, скрытые полигоны тела.
+- `Rig(model)` — расширяет скелет тела костями с пружиной, вычисляет веса для каждой квадовой детали, жёсткую привязку для `bind="<bone or role>"` и CAD-деталей, жёсткую привязку по сегментам `_segments` для `bind=dict(mode="segments", …)` (кость по каждую сторону секущей плоскости, smoothstep на `blend` мм), коллайдеры, скрытые полигоны тела.
 - Перенос весов `_auto`: ограничение по стороне для каждой вершины (левые вершины никогда не берут веса правых конечностей), необязательное ограничение по области/роли, барицентрические веса от ближайшего треугольника тела, сглаживание у краёв, смешивание с весами цепочек пружин, 4 наибольших влияния.
 - `chains(part, body)` — цепочки пружин из `dynamics` детали (ключи `patch, chains, bones, v0, v1, blend, parent, follow, radius, colliders, path`); имена костей `<key>_d<zone>p<k>c<chain>_<i>`.
 - `body_colliders(body)` — капсулы для бёдер, голеней, плеч, предплечий, таза, торса, головы.

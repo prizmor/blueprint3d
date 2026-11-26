@@ -130,13 +130,16 @@ class Outfit:
         extra = sum(2 * w * (k - 1) for _, w, k in dense)
         return spacing(int(round(n * (1 + extra))), dense)
 
-    def add(self, key, pos, name, material, pieces, finish="cloth", color=None, layer=1, bind="auto",
+    def add(self, key, pos, name, material, pieces, finish="cloth", color=None, layer=1, bind=None,
             dynamics=None, hides=None, pattern=None, note="", count=True, group="ext", t=None, lining=None, folds=None):
         """Собрать блоки в одну деталь: общие ряды свариваются, оболочка получает толщину, готовые тела
         добавляются как есть. Заполняет слой, привязку, динамику и сведения для проверок.
         folds — складки и рельеф (bp3d.folds.Fold, помощники fold_* / folds_* и auto_folds): режим "geo"
-        меняет геометрию оболочки (сетка у складок сгущается), "normal" и "mask" запекаются в карты."""
+        меняет геометрию оболочки (сетка у складок сгущается), "normal" и "mask" запекаются в карты.
+        bind — привязка (bp3d.rig); не задана — привязка блока (у обуви — жёсткая по сегментам), иначе "auto"."""
         pieces = pieces if isinstance(pieces, (list, tuple)) else [pieces]
+        if bind is None:
+            bind = next((p.bind for p in pieces if getattr(p, "bind", None) is not None), "auto")
         shells = [p for p in pieces if p.patches]
         fl = list(folds or []) + [f for p in pieces for f in getattr(p, "folds", [])]
         mesh, notes = None, []
@@ -1098,7 +1101,7 @@ class Outfit:
 
     # ------------------------------------------------------------ обувь
     def shoe(self, side, shaft=0.9, layer=2, ease=3.0, t=2.0, sole=10.0, welt=3.0, toe=0.30, toe_height=32.0,
-             cols=24, name=None, rand=8.0):
+             cols=24, name=None, rand=8.0, fit="rigid", flex=24.0, ankle_room=6.0, shaft_bend=None):
         """Обувь — ботинок или сапог на КОЛОДКЕ: форма стопы у обуви своя, фиксированная, а не обтяжка стопы
         (обтяжка повторяла пальцы и свод). Голенище (от параметра ноги shaft: 0.9 — чуть выше щиколотки,
         0.7 — до середины голени) и изгиб у щиколотки идут по ноге; от подъёма до носка — колодка:
@@ -1107,7 +1110,13 @@ class Outfit:
         sole с рантом welt и бортиком высотой rand, который поднимается по стенке верха (лоскут «<имя>_sole»:
         ему можно дать свой цвет узором kind="fill").
         Подошва уходит ниже пола на sole мм: в игре корень персонажа поднимается на эту величину.
-        Верх открыт, толщина верха t. Привязка — по весам ноги: щиколотка гнётся."""
+        Верх открыт, толщина верха t.
+        Привязка (fit): "rigid" (по умолчанию) — обувь жёсткая модель, как в играх: стопа целиком на кости стопы,
+        носок за линией пальцев — на кости пальцев с плавным сгибом шириной flex мм (flex=None — подошва не
+        гнётся), голенище выше щиколотки — на голени (shaft_bend: True / False / None — само, если голенище
+        выше щиколотки больше чем на 80 мм). Обувь не тянется по коже: форма неподвижна, только поворачивается
+        с костями. Горловина шире на ankle_room мм к верхнему краю — место голени при сгибе щиколотки.
+        "skin" — прежняя привязка весами ноги."""
         from .body import plane_segments
         from .mesh import _orient_like_first
         B = self.B
@@ -1125,16 +1134,19 @@ class Outfit:
         front = fv[np.abs(fv[:, 2] - min(ank[2] * 0.85, fv[:, 2].max())) < 12.0]
         pivot = np.array([float(front[:, 0].min()) - 44.0, float(np.median(fv[:, 1])), zp])     # перед подъёмом стопы
 
-        def ring_at(origin, n):
+        def ring_at(origin, n, extra=0.0):
             S = plane_segments(B.V, B.T[mask], origin, n).reshape(-1, 3)
             S = S[np.linalg.norm(S - ank, axis=1) < 260.0]
             c = S.mean(axis=0)
             c = c - n * ((c - origin) @ n)
-            return B.ring(c, n, (0.0, sg, 0.0), cols, reg, "far", 1.0, 1.0, off, rmax=130.0)[0]
+            return B.ring(c, n, (0.0, sg, 0.0), cols, reg, "far", 1.0, 1.0, off + extra, rmax=130.0)[0]
         ptop, _ = B.limb_point(limb, shaft)
+        rigid = fit == "rigid"
         rings = []
         for z in np.linspace(ptop[2], zp, max(3, int((ptop[2] - zp) / 16.0) + 2)):             # голенище
-            rings.append(ring_at(np.array([ank[0], ank[1], z]), np.array([0.0, 0.0, -1.0])))
+            # жёсткая обувь: голень при сгибе щиколотки ходит в горловине — к верху горловина свободнее
+            ex = ankle_room * float(smoothstep((z - zp) / max(ptop[2] - zp, 1.0))) if rigid else 0.0
+            rings.append(ring_at(np.array([ank[0], ank[1], z]), np.array([0.0, 0.0, -1.0]), ex))
         for ph in np.radians([22.5, 45, 67.5, 90]):                                            # изгиб: веер плоскостей
             rings.append(ring_at(pivot, np.array([-math.sin(ph), 0.0, -math.cos(ph)])))
         G = B.push_out(np.stack(rings, axis=1), off - 0.2)
@@ -1226,7 +1238,28 @@ class Outfit:
         pc = Piece(solid=upper.merged(sm_), edges=dict(top=tube.G[:, 0], front_line=front_line), name=name)
         pc.layer, pc.limb = layer, limb
         pc.ground, pc.kind, pc.side = sole, "shoe", side
+        if rigid:
+            pc.bind = self.shoe_bind(side, flex=flex, shaft_bend=(ptop[2] - ank[2] > 80.0) if shaft_bend is None else shaft_bend)
         return pc
+
+    def shoe_bind(self, side, flex=24.0, shaft_bend=False, ankle=50.0, ankle_blend=40.0):
+        """Жёсткая привязка обуви по сегментам (bp3d.rig, mode="segments"): стопа — кость стопы; носок за
+        плоскостью через сустав пальцев поперёк стопы — кость пальцев (переход flex мм; None — без сгиба);
+        при shaft_bend голенище выше щиколотки на ankle мм — голень (переход ankle_blend мм). Подходит и для
+        своей обуви и деталей на стопе: O.add(..., bind=O.shoe_bind("L"))."""
+        B = self.B
+        ank = B.joint(f"foot_{side}")
+        cuts = []
+        if flex is not None and f"toe_{side}" in B.roles:
+            tj = B.joint(f"toe_{side}")
+            d = tj - ank
+            d[2] = 0.0
+            cuts.append(dict(bone=f"toe_{side}", point=tj.tolist(), normal=(d / max(np.linalg.norm(d), 1e-9)).tolist(),
+                             blend=max(float(flex), 1.0)))
+        if shaft_bend:
+            cuts.append(dict(bone=f"shin_{side}", point=[float(ank[0]), float(ank[1]), float(ank[2] + ankle)],
+                             normal=[0.0, 0.0, 1.0], blend=float(ankle_blend)))
+        return dict(mode="segments", bone=f"foot_{side}", cuts=cuts)
 
     # ================================================================== складки (bp3d.folds)
     # Помощники возвращают списки Fold; их передают в add(..., folds=[...]). Кривые строятся по телу и
@@ -1520,4 +1553,5 @@ class Outfit:
                 laces = laces.merged(ring)
         lp = Piece(solid=laces, name=f"{nm}_laces")
         lp.layer = getattr(shoe, "layer", 2) + 1
+        lp.bind = getattr(shoe, "bind", None)                      # шнурки — той же жёсткой привязкой, что ботинок
         return blocks, lp

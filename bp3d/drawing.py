@@ -833,14 +833,28 @@ def table_measures(sh, body, at):
     _table(sh, at, "МЕРКИ ТЕЛА, мм", [(58, "Мерка"), (16, "Значение")], rows, rh=4.0, size=2.1)
 
 
+def bind_label(b):
+    """Подпись привязки для таблиц листа: веса с кожи, прокси-тело, жёстко по сегментам или одна кость."""
+    from .rig import BIND_ALIASES
+    b = "auto" if b is None else b
+    mode = BIND_ALIASES.get(b.get("mode", "auto") if isinstance(b, dict) else b, None)
+    mode = mode or (b.get("mode", "auto") if isinstance(b, dict) else b)
+    if mode == "auto":
+        return "веса тела"
+    if mode == "proxy":
+        return "прокси-тело"
+    if mode == "segments":
+        return "жёстко: " + ", ".join([b["bone"]] + [c["bone"] for c in b.get("cuts", ())])
+    return f"кость {mode}"
+
+
 def _dyn_rows(model):
     from .rig import _dyn_list, chains as rig_chains
     rows = []
     for p in model.parts:
         if p.group in ("phantom", "theory"):
             continue
-        b = p.bind if p.bind is not None else "auto"
-        bind = "веса тела" if (b == "auto" or isinstance(b, dict)) else f"кость {b}"
+        bind = bind_label(p.bind)
         zones = _dyn_list(p) if p.mesh == "quad" else []
         if not zones:
             rows.append((p, bind, None, 0, 0))
@@ -860,8 +874,7 @@ def table_layers(sh, model, at):
         seen.add(p.pos)
         gap = f"{p.info.get('gap', 0):g}" if p.layer else "—"
         th = f"{p.info.get('thickness', 0):g}" if p.mesh == "quad" else "—"
-        b = p.bind if p.bind is not None else "auto"
-        bind = "веса тела" if (b == "auto" or isinstance(b, dict)) else f"кость {b}"
+        bind = bind_label(p.bind)
         rows.append([f"{p.pos}  {p.name}", str(p.layer) if p.layer else "—", gap, th, bind, "да" if p.hides else "—"])
     _table(sh, at, "СЛОИ И ПРИВЯЗКА", [(46, "Поз. Деталь"), (10, "Слой"), (15, "Отступ"), (13, "Толщ."), (24, "Привязка"), (14, "Тело")],
            rows)

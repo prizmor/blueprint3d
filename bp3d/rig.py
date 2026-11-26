@@ -19,7 +19,9 @@ from .body import REGIONS
 
 MAX_INFLUENCES = 4
 # Стратегии привязки (поле bind): "auto"/"tight" — облегающая, веса с ближайшей точки тела; "proxy"/"loose" —
-# свободная, веса с раздутого и сглаженного прокси-тела (Body.proxy); имя кости или роль — жёсткая деталь.
+# свободная, веса с раздутого и сглаженного прокси-тела (Body.proxy); имя кости или роль — жёсткая деталь;
+# dict(mode="segments", bone=..., cuts=[...]) — жёсткая деталь из нескольких сегментов (обувь, броня, щитки):
+# вершины на кости bone, за каждой секущей плоскостью — на кости этой плоскости, с плавным переходом blend мм.
 BIND_ALIASES = {"tight": "auto", "loose": "proxy"}
 PROXY_FROM = (10.0, 22.0)  # зазор ткани до тела, мм: ближе первого — веса с кожи, дальше второго — с прокси
 WEIGHT_MIN_LOOSE = 0.03    # свободная вещь: влияния меньше этого отбрасываются мягко (до выбора MAX_INFLUENCES)
@@ -248,6 +250,12 @@ class Rig:
             b = p.bind if p.bind is not None else "auto"
             mode = b.get("mode", "auto") if isinstance(b, dict) else b
             mode = BIND_ALIASES.get(mode, mode)
+            if mode == "segments":                     # квадовая — весами по сегментам, CAD — на основной кости
+                if p.mesh == "quad":
+                    self.W[p.key] = self._segments(p.quad.V, b, nb)
+                else:
+                    self.rigid[p.key] = body.bone(b["bone"])
+                continue
             if mode not in ("auto", "proxy"):
                 self.rigid[p.key] = body.bone(mode)
                 if p.mesh == "quad":
@@ -269,6 +277,22 @@ class Rig:
             opt.setdefault("smooth_mm", SMOOTH_MM_TIGHT)
             self.W[p.key] = self._auto(p, opt, nb)
         self.hidden = self._hidden()
+
+    def _segments(self, V, opt, nb):
+        """Жёсткая привязка по сегментам: все вершины на кости opt["bone"]; каждая секущая из opt["cuts"]
+        (dict(bone, point, normal, blend)) забирает вершины по ту сторону плоскости, куда смотрит normal,
+        с плавным переходом шириной blend мм по обе стороны плоскости. Секущие применяются по порядку.
+        Внутри сегмента деталь не деформируется — только поворачивается с костью."""
+        W = np.zeros((len(V), nb), np.float32)
+        W[:, self.body.bone(opt["bone"])] = 1.0
+        for c in opt.get("cuts", ()):
+            n = np.asarray(c["normal"], float)
+            n = n / max(np.linalg.norm(n), 1e-9)
+            bl = max(float(c.get("blend", 20.0)), 1e-3)
+            s = smoothstep(((V - np.asarray(c["point"], float)) @ n) / bl + 0.5).astype(np.float32)
+            W *= (1.0 - s)[:, None]
+            W[:, self.body.bone(c["bone"])] += s
+        return _limit(W)
 
     def _auto(self, p, opt, nb):
         body, q = self.body, p.quad

@@ -12,6 +12,7 @@ Every pull request that changes the tool adds a line under **Unreleased** (CI ch
 - Garment blocks: `binding`, `waistband`, `sneaker_details`; `pants` loose cut (`ease` by landmarks, `leg_ease` by zones, `leg_around`, `leg_tent`, `leg_smooth`, `crease`, `elastic`).
 - Weights through a proxy body for loose garments (`bind="loose"`, `Body.proxy`), blended by the gap to the body; weight smoothing by distance (`smooth_mm`).
 - Pose test: stretch and compression of the outer layer against the skin under it, zone thresholds; skin self-collision detection (`skin` rows, not counted).
+- Rigid binding by segments (`bind=dict(mode="segments", bone=…, cuts=[…])`): a part rotates with several bones without deforming inside a segment; blocks may carry a default binding (`Piece.bind`); `Outfit.shoe_bind`.
 - Sheet: `views[].folds` — fold lines on views.
 - Sample `examples/garment_folds`.
 - `mesh.refine_patch`, `QuadMesh.sync_patches`, `QuadMesh.gid`, `QuadMesh.patch_uv`.
@@ -24,10 +25,14 @@ Every pull request that changes the tool adds a line under **Unreleased** (CI ch
 - **[hash]** `garment.py`, `mesh.py`, `rig.py`, `body.py` changed: approval hashes of garment objects change.
 - **[hash]** Garments: the stand collar is built from rings around the neck axis (even top edge, constant clearance, lower at the front; `front_drop`) instead of pushing each point out of the body.
 - **[hash]** Garments: `shoe()` is built on a last with a separate sole patch (`sole`, `welt`, `toe`, `toe_height`) instead of wrapping the foot; default `ease` 3.0, `sole` 10.0, `cols` 24.
+- **[hash]** Garments: `shoe()` is a rigid model by default (`fit="rigid"`): foot bone, toe hinge past the ball line (`flex`), shaft of a high boot on the shin (`shaft_bend`), collar looser towards the top (`ankle_room`). `fit="skin"` keeps the former leg-weight binding. `Outfit.add(bind=None)` now takes the block's binding, else `"auto"`.
 - **[hash]** Garments: `buckle()` takes `normal` and `up` and lies on the belt; `belt()` returns `front_normal` and `front_up`. The buckle is now positioned by `center` on the belt surface.
 - **[hash]** Garments: skirt dynamics defaults use only leg and pelvis colliders.
 - Pose test: chains of one dynamics zone are linked laterally (`posetest.LATERAL`), so a hem no longer sags as a wedge between the thighs; `<name>_dynamics.json` chains carry `ring`.
 - Atlas: pattern kind `fill` (whole island in one colour).
+
+### Fixed
+- Sheet: the binding column of the layers table showed `bind="tight"` as a bone ("кость tight"); it now names skin weights, proxy body, rigid segments or a bone.
 - **[hash]** Garments: the shoe sole is a cup with a `rand` wall that rises along the upper; the stand collar starts exactly at the neckline edge; `bodice()` evens out the neckline edge and smooths the fabric near the neck.
 - Docs: the garment pipeline is marked as early-stage in the README, the manual and `AGENTS.md`, with a request to report problems or send fixes.
 - CI: `actions/checkout` and `actions/setup-python` v7 (Node 24).

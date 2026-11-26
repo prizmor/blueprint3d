@@ -140,13 +140,13 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 - Constants: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` mm, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, `DYNAMICS = {stiff, soft, rigid}` presets (stiffness, damping, gravity, radius).
 - `Piece(patches, t, edges, solid, joints, name)` — outer-surface grids with named edges other blocks attach to; joints for the joint-loop check.
 - `Outfit(model, body, cols=48)` — sets `model.body`, adds the body as a `phantom` part; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` welds pieces into one quad part with thickness and fills `info` (gap, joints, regions, lining).
-- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`; helpers `waist_ring`, `push_over`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
+- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`; helpers `waist_ring`, `push_over`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
 
 ## `rig.py`
 
 **Owns:** binding a garment to the skeleton. **Hashed for garment specs.**
 
-- `Rig(model)` — extends the body skeleton with spring bones, computes weights for every quad part, rigid binding for `bind="<bone or role>"` and CAD parts, colliders, hidden body polygons.
+- `Rig(model)` — extends the body skeleton with spring bones, computes weights for every quad part, rigid binding for `bind="<bone or role>"` and CAD parts, rigid binding by segments `_segments` for `bind=dict(mode="segments", …)` (bone per side of each cutting plane, smoothstep over `blend` mm), colliders, hidden body polygons.
 - Weight transfer `_auto`: per-vertex side restriction (left vertices never take right-limb weights), optional region/role restriction, barycentric weights from the closest body triangle, edge smoothing, blend with spring-chain weights, top 4 influences.
 - `chains(part, body)` — spring chains from a part's `dynamics` (keys `patch, chains, bones, v0, v1, blend, parent, follow, radius, colliders, path`); bone names `<key>_d<zone>p<k>c<chain>_<i>`.
 - `body_colliders(body)` — capsules for thighs, shins, upper arms, forearms, pelvis, torso, head.
