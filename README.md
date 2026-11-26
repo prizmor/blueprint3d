@@ -2,7 +2,7 @@
 
 **Drawing as code → 3D model, one to one.** Describe an object once as a parametric Python specification (`spec.py`) and get both a technical drawing sheet and a game-ready 3D model from the same geometry. What is on the drawing is exactly what is in the model.
 
-[Русская версия](README.ru.md) · [Full manual (EN)](docs/manual.en.md) · [Полное руководство (RU)](docs/manual.ru.md) · [Guide for AI agents](AGENTS.md)
+[Русская версия](README.ru.md) · [Documentation](docs/README.md) · [Manual](docs/manual.en.md) · [Architecture](docs/architecture.en.md) · [CLI](docs/cli.en.md) · [Guide for AI agents](AGENTS.md)
 
 | Output | What you get |
 |---|---|
@@ -64,7 +64,7 @@ bp3d/          the tool: CLI (__main__.py), geometry (kit.py), quad mesh (mesh.p
                Blender scripts (bl_*.py), bodies, garments, rigging, pose test
 bodies/        rigged bodies for garments: mannequin_f (MakeHuman, A-pose), dummy_t (code-built, T-pose)
 examples/      sample specifications; selftest runs on them; examples/starter is the template for `new`
-docs/          full manual in English and Russian
+docs/          documentation in English and Russian: manual, architecture, modules, CLI, file formats, development
 scripts/       installers: install.ps1, install.sh, install_mpfb.ps1 (only to rebuild the mannequin)
 ```
 
@@ -72,7 +72,7 @@ scripts/       installers: install.ps1, install.sh, install_mpfb.ps1 (only to re
 
 If you are a good game designer, a good programmer, a 3D artist, or you simply understand this better than I do — please send pull requests. Better geometry, better topology, better drawings, new garment blocks, other engines and platforms, clearer docs, bug fixes: all of it is welcome. The goal is a tool that keeps getting better and produces higher-quality results for everyone.
 
-How it works: fork, branch, change, run `python -m bp3d selftest --draw`, open a pull request. Every pull request is reviewed and merged by the maintainer. Details — [CONTRIBUTING.md](CONTRIBUTING.md).
+How it works: fork, branch, change, run `python -m bp3d selftest --draw`, update the documentation and `CHANGELOG.md` (documentation is mandatory for every change), open a pull request. Every pull request is reviewed and merged by the maintainer. Details — [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

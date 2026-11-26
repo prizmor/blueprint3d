@@ -52,7 +52,7 @@ Commands: `new`, `check`, `draw [--quick]`, `crop`, `approve`, `build [--force] 
 
 Any change to `spec.py`, `kit.py` or `mesh.py` after approval makes the approval stale (for garments also `body.py`, `garment.py`, `rig.py` and the body file). Re-draw and get a new approval. `--force` output is a draft for your own checks, never a result for the user.
 
-**Garments:** `new → check → draw --quick → crop → build --force → posetest → fixes → draw → approval → build → posetest → render`. Read the manual's «Одежда» / "Garments" section first: body landmarks, layers and gaps, density near joints, binding, spring-bone dynamics, the rules learned in practice (sleeve not ending at the elbow, belt on body weights, skirt dynamics from the hip line, overlays with `over=[…]`).
+**Garments:** `new → check → draw --quick → crop → build --force → posetest → fixes → draw → approval → build → posetest → render`. Read the manual's «Одежда» / "Clothing" section first: body landmarks, layers and gaps, density near joints, binding, spring-bone dynamics, the rules learned in practice (sleeve not ending at the elbow, belt on body weights, skirt dynamics from the hip line, overlays with `over=[…]`).
 
 ## 5. Improving the tool
 
@@ -60,7 +60,14 @@ Any change to `spec.py`, `kit.py` or `mesh.py` after approval makes the approval
 - Add what is missing to `bp3d/` with comments; **existing specifications must keep working** (new `Model.add` fields are optional, defaults unchanged).
 - After any change in `bp3d/`: `python -m bp3d selftest --draw` — all samples pass, then look at the sample sheets in `examples/<name>/out/drawing/` with your own eyes.
 - A changed `kit.py`, `mesh.py`, `body.py`, `garment.py` or `rig.py` changes the approval hash of every user object built on it. Say so in the pull request.
-- A new rule or limitation goes into **both** manuals (`docs/manual.ru.md` and `docs/manual.en.md`) in the same change; a new technique goes into a sample or the starter template.
+- **Documentation is mandatory — part of the change, not a follow-up.** Before you write code, read [docs/architecture.en.md](docs/architecture.en.md) and the section of [docs/modules.en.md](docs/modules.en.md) for the modules you touch. In the same pull request:
+  - add a line to `CHANGELOG.md` under **Unreleased** (mark **[hash]** / **[breaking]** where it applies);
+  - update every document the change affects — the table "You changed → Update" in [docs/development.en.md](docs/development.en.md#documentation-policy) says which (CLI, file formats, modules, architecture, manual);
+  - update **both** languages (`*.en.md` and `*.ru.md`);
+  - copy names, defaults and thresholds from the code; do not describe intentions as behaviour;
+  - put a new technique into a sample or the starter template so `selftest` covers it.
+
+  The CI job `docs` fails a pull request that changes `bp3d/`, `scripts/`, `examples/`, `bodies/` or `requirements.txt` without `CHANGELOG.md` and documentation. If you notice documentation that disagrees with the code, fix it in the same pull request or report it.
 - Blender scripts that save `.blend` files that end up in git (bodies) must use `bl_common.save_clean()` — plain `save_as_mainfile` stores the absolute path of the machine it ran on.
 - Do not commit `venv/`, `.cache/`, `.python/`, `.mpfb/`, `out/`, personal paths, user names or project/company names.
 
@@ -70,8 +77,14 @@ Any change to `spec.py`, `kit.py` or `mesh.py` after approval makes the approval
 |---|---|
 | Spec format, part fields, groups, finishes | manual → «Спецификация объекта» / "Object specification" |
 | Double-curvature panels, quad meshes, pitfalls | manual → «Геометрия» / "Geometry" |
-| Garments, body, layers, dynamics, posetest | manual → «Одежда» / "Garments" |
+| Garments, body, layers, dynamics, posetest | manual → «Одежда» / "Clothing" |
 | Sheet keys (views, sections, dims, tables) | manual → «Лист» / "Sheet" |
-| Self-check lists for drawing, model, garment | manual → «Самопроверка» / "Self-check" |
+| Self-check lists for drawing, model, garment | manual → «Самопроверка» / "Self-review" |
 | Bodies, their origin and licence, custom bodies | [bodies/README.md](bodies/README.md) |
 | Working examples | `examples/*/spec.py` (`starter` is the template) |
+| How the tool is built: stages, Python ↔ Blender, hash, axes | [docs/architecture.en.md](docs/architecture.en.md) |
+| What each module does, public API, global state, known issues | [docs/modules.en.md](docs/modules.en.md) |
+| Every command, flag, exit code, environment variable | [docs/cli.en.md](docs/cli.en.md) |
+| Every file the tool reads or writes | [docs/file-formats.en.md](docs/file-formats.en.md) |
+| Rules for changing the tool, documentation policy, testing, versions | [docs/development.en.md](docs/development.en.md) |
+| Map of all documents | [docs/README.md](docs/README.md) |

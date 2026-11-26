@@ -14,8 +14,9 @@ Thank you for wanting to make Blueprint3D better. Game designers, programmers, 3
    python -m bp3d selftest --draw
    ```
    All samples must pass. Open the sample sheets in `examples/<name>/out/drawing/` and check them by eye. For 3D or garment changes, also run `build` / `posetest` on the affected sample and look at the renders.
-5. Update the docs in the same pull request: a new rule, option or limitation goes into both `docs/manual.en.md` and `docs/manual.ru.md` (if you write only one language, say so in the pull request — the maintainer will add the other).
-6. Open a pull request and fill in the template. Small focused pull requests are reviewed faster than large mixed ones.
+5. **Documentation is mandatory.** In the same pull request: a line in `CHANGELOG.md` under **Unreleased**, and every document your change affects — CLI reference, file formats, module reference, architecture, manual — in both languages (`*.en.md` and `*.ru.md`). Which document covers what: [docs/development.en.md → Documentation policy](docs/development.en.md#documentation-policy). If you can write only one language, say so in the pull request and the maintainer completes the other. CI (job `docs`) rejects code changes without a changelog entry and documentation; a pull request whose docs disagree with the code is not merged.
+6. Before writing code, read [docs/architecture.en.md](docs/architecture.en.md) and the [module reference](docs/modules.en.md) for the parts you touch; follow the rules in the [development guide](docs/development.en.md).
+7. Open a pull request and fill in the template. Small focused pull requests are reviewed faster than large mixed ones.
 
 Every pull request needs the maintainer's approval and passing CI before it is merged. Nobody else can push to `main`.
 
@@ -44,8 +45,9 @@ Be respectful and constructive. Criticise code, not people. Harassment of any ki
 2. Установка: `scripts/install.ps1` или `scripts/install.sh`.
 3. Правка. Существующие спецификации должны работать как раньше: новые опции — необязательные, старые умолчания не меняются.
 4. `python -m bp3d selftest --draw` — все образцы проходят; листы образцов в `examples/<имя>/out/drawing/` просмотреть глазами. Для 3D и одежды — ещё `build` / `posetest` на затронутом образце и рендеры.
-5. Документация — в том же pull request: новое правило, опция или ограничение идёт в `docs/manual.ru.md` и `docs/manual.en.md` (если пишете на одном языке — укажите, второй допишет мейнтейнер).
-6. Pull request по шаблону. Маленькие и цельные PR смотрятся быстрее.
+5. **Документация обязательна.** В том же pull request — строка в `CHANGELOG.md` в разделе **Unreleased** и все затронутые документы: команды, форматы файлов, модули, архитектура, руководство — на обоих языках (`*.ru.md` и `*.en.md`). Что где описывается — [docs/development.ru.md → Правила документации](docs/development.ru.md#правила-документации). Пишете на одном языке — укажите, второй допишет мейнтейнер. CI (задача `docs`) не пропускает правку кода без записи в changelog и документации; PR, где документация расходится с кодом, не вливается.
+6. До правки прочитать [docs/architecture.ru.md](docs/architecture.ru.md) и [справочник модулей](docs/modules.ru.md) по затрагиваемым частям; правила — [руководство разработчика](docs/development.ru.md).
+7. Pull request по шаблону. Маленькие и цельные PR смотрятся быстрее.
 
 Каждый PR вливается только после апрува мейнтейнера и зелёного CI. Пушить в `main` больше никто не может.
 
