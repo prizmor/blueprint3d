@@ -223,6 +223,11 @@ def refine_for_folds(patches, folds, notes=None):
     for P, (u_edges, v_edges) in zip(patches, shared):
         G = P.G
         nu, nv = G.shape[:2]
+        if P.mask is not None:                     # лоскут с вырезом не сгущается: маска привязана к ячейкам
+            if notes is not None:
+                notes.append(f"{P.name}: лоскут с вырезом — сетка у складок не сгущается")
+            out.append(P)
+            continue
 
         def gaps(axis, closed):
             """Сколько рядов вставить в каждый промежуток вдоль оси: важен только шаг ПОПЕРЁК складки
@@ -253,8 +258,10 @@ def refine_for_folds(patches, folds, notes=None):
                 So = np.linalg.norm(np.diff(G, axis=oth), axis=2)               # шаги по другой оси
                 So = np.concatenate([So, So[-1:]] if oth == 0 else [So, So[:, -1:]], axis=oth)
                 Sa = np.linalg.norm(Bq - A, axis=2)                             # шаги по этой оси
-                Som = (np.take(So, np.arange(A.shape[axis]), axis=axis)
-                       + np.take(So, np.arange(1, A.shape[axis] + 1) % G.shape[axis], axis=axis)) / 2
+                # больший из шагов двух соседних рядов: у развилок (пах, подмышка) колонки расходятся, и по
+                # среднему шагу сгущение давало квады 1:9
+                Som = np.maximum(np.take(So, np.arange(A.shape[axis]), axis=axis),
+                                 np.take(So, np.arange(1, A.shape[axis] + 1) % G.shape[axis], axis=axis))
                 cap = np.floor(Sa * REFINE_ASPECT / np.maximum(Som, 1e-6)) - 1
                 cap = cap.min(axis=0 if axis == 1 else 1)
             else:

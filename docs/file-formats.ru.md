@@ -71,7 +71,7 @@
 
 | Ключ | Содержимое |
 |---|---|
-| `parts` | `{key: {pos, mesh, tris, quads, non_manifold_edges, bbox_dev_mm, group}}`; квадовые детали добавляют `tris_only, brep_dev_max_mm, brep_dev_mean_mm, aspect_max, uv_stretch`; одежда добавляет `verts, layer, bind, dynamics` |
+| `parts` | `{key: {pos, mesh, tris, quads, non_manifold_edges, bbox_dev_mm, group}}`; квадовые детали добавляют `tris_only, brep_dev_max_mm, brep_dev_mean_mm, aspect_max, uv_stretch, tverts, poles, valence`; одежда добавляет `verts, layer, bind, dynamics` |
 | `warnings` | список строк: отклонение размера > 3 мм, деталь отсутствует в glTF, проблемы сварки |
 | `atlas` | `{px, px_per_cm, islands, texture}` |
 | `renders` | сделанные проверочные рендеры |
@@ -102,7 +102,7 @@
 {
   code, title,
   parts: [ {key, pos, name, finish, group, mesh: "cad"|"quad", bbox_mm[6], color, layer, gray, metal, rough,
-            quad parts: stats, colored, two_sided, dynamics} ],
+            quad parts: stats, colored, two_sided, dynamics, variant} ],
   quads: "<path to quads.npz>" | null,
   atlas: {size_mm, px, px_per_cm, islands: [{part, name, tag, x, y, w, h, scale, color, patterns}]},
   rig (garments): {bones: [{name, parent, head, tail}], bone_names, rigid: {key: bone}, hidden_polys,
@@ -166,7 +166,7 @@
 
 ### `_shots.json` (Python → `bl_pose.py`, временный)
 
-`{"shots": [{name, pose: {bone: 16 floats row-major, CAD mm}, mode: solid|wire|toon|matte, dir, target, radius, res}]}`.
+`{"shots": [{name, pose: {bone: 16 floats row-major, CAD mm}, mode: solid|wire|toon|matte|inspect, dir, target, radius, res, parts, hide}]}` (`parts` — показать только эти детали, `hide` — скрыть эти: невыбранные варианты).
 
 ## Кэши
 

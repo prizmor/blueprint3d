@@ -54,19 +54,28 @@ def resample_open(line, n):
 class Patch:
     """Сетка точек G[i, j] (nu, nv, 3) — один UV-остров. closed_u / closed_v — сетка замкнута по
     направлению (последний ряд соединяется с первым; дублирующий ряд не хранится). Нормаль лоскута —
-    du × dv, она должна смотреть НАРУЖУ: толщина наращивается в обратную сторону."""
+    du × dv, она должна смотреть НАРУЖУ: толщина наращивается в обратную сторону.
+    mask — какие ячейки сетки (cu, cv) остаются гранями (False — вырез, окно, прорезь; см. Outfit.cutout);
+    None — все."""
 
-    def __init__(self, G, closed_u=False, closed_v=False, name="", uv_scale=1.0):
+    def __init__(self, G, closed_u=False, closed_v=False, name="", uv_scale=1.0, mask=None):
         self.G = np.asarray(G, float)
         if self.G.ndim != 3 or self.G.shape[2] != 3:
             raise ValueError("сетка лоскута должна иметь форму (nu, nv, 3)")
         self.closed_u, self.closed_v = bool(closed_u), bool(closed_v)
         self.name = name
         self.uv_scale = uv_scale
+        self.mask = None if mask is None else np.asarray(mask, bool)
+
+    def cells(self):
+        """Число ячеек (граней) по u и v."""
+        nu, nv = self.G.shape[:2]
+        return (nu if self.closed_u else nu - 1), (nv if self.closed_v else nv - 1)
 
     def flipped(self):
         """Тот же лоскут с нормалью в другую сторону."""
-        return Patch(self.G[:, ::-1], self.closed_u, self.closed_v, self.name, self.uv_scale)
+        return Patch(self.G[:, ::-1], self.closed_u, self.closed_v, self.name, self.uv_scale,
+                     None if self.mask is None else self.mask[:, ::-1])
 
     def wrapped(self):
         """Сетка с повтором первого ряда по замкнутым направлениям (для B-сплайна и длин)."""
@@ -100,7 +109,7 @@ class Patch:
 
     def offset(self, t):
         """Эквидистанта лоскута на t мм вдоль нормали."""
-        return Patch(self.G + self.normals() * t, self.closed_u, self.closed_v, self.name, self.uv_scale)
+        return Patch(self.G + self.normals() * t, self.closed_u, self.closed_v, self.name, self.uv_scale, self.mask)
 
     def brep_grid(self):
         """Сетка для kit.bspline_surface: с повтором замыкающего ряда и не меньше 4 рядов по каждому
@@ -178,6 +187,10 @@ class QuadMesh:
             cu = nu if P.closed_u else nu - 1
             cv = nv if P.closed_v else nv - 1
             I, J = np.meshgrid(np.arange(cu), np.arange(cv), indexing="ij")
+            if P.mask is not None:                     # вырезы: ячейки вне маски — не грани
+                if P.mask.shape != (cu, cv):
+                    raise ValueError(f"лоскут {P.name}: маска {P.mask.shape} не совпадает с ячейками {(cu, cv)}")
+                I, J = I[P.mask], J[P.mask]
             I, J = I.ravel(), J.ravel()
             I2, J2 = (I + 1) % nu, (J + 1) % nv
             F.append(base + np.stack([I * nv + J, I2 * nv + J, I2 * nv + J2, I * nv + J2], axis=1))
@@ -206,15 +219,34 @@ class QuadMesh:
         if border:
             m.sharp = np.vstack(border)
         remap = m._weld(weld)
+        if any(P.mask is not None for P in m.patches):
+            remap = m._drop_unused(remap)              # точки сетки внутри выреза — не вершины меша
         m.gid = [remap[b + np.arange(nu * nv)].reshape(nu, nv) for b, nu, nv in bases]
         return m
+
+    def _drop_unused(self, remap):
+        """Убрать вершины, не входящие ни в одну грань (внутри вырезов). Возвращает новый remap (−1 — нет)."""
+        used = np.zeros(len(self.V), bool)
+        used[self.F[self.F >= 0]] = True
+        new = np.full(len(self.V), -1)
+        new[used] = np.arange(int(used.sum()))
+        self.V, self.vpatch, self.vuv, self.vside = self.V[used], self.vpatch[used], self.vuv[used], self.vside[used]
+        self.F = np.where(self.F >= 0, new[np.clip(self.F, 0, None)], -1)
+        if len(self.sharp):
+            s = new[self.sharp]
+            self.sharp = s[(s >= 0).all(axis=1)]
+        return np.where(remap >= 0, new[np.clip(remap, 0, None)], -1)
 
     def sync_patches(self):
         """Сетки лоскутов -> по текущим вершинам меша (после смещения складками или деформеров): B-rep для
         чертежа, отклонение и запекание карт идут по той же форме, что и меш."""
         for k, P in enumerate(self.patches):
             if k < len(self.gid) and self.gid[k] is not None and self.gid[k].shape == P.G.shape[:2]:
-                P.G = self.V[self.gid[k]].copy()
+                g = self.gid[k]
+                ok = g >= 0                            # точки внутри выреза остаются как были
+                G = P.G.copy()
+                G[ok] = self.V[g[ok]]
+                P.G = G
         self._brep = None
         return self
 
@@ -444,6 +476,51 @@ class QuadMesh:
                     closed=boundary == 0 and nonman == 0, degenerate=degenerate,
                     aspect_max=float(asp.max()), aspect_bad=int(np.sum(asp > aspect_max)),
                     edge_mean=float(e[body].mean()) if body.any() else 0.0, **self.counts())
+
+    def topology(self, tol=0.02):
+        """Топология наружного слоя: полюсы (внутренние вершины не с 4 рёбрами — 3, 5, 6+; узлы раскладки:
+        развилка в паху и подмышке, примыкание капюшона) и T-вершины (вершина лежит на чужом открытом ребре:
+        лоскуты разного разрешения сварены не по общим точкам — в игре там щель). Возвращает dict(poles —
+        [(точка, валентность)], valence — {валентность: число}, tverts — [точки])."""
+        outer = self.face_tag == OUTER
+        F = self.F[outer]
+        nb = {}
+        und = {}
+        for f in F:
+            vs = [v for v in f if v >= 0]
+            for a, b in zip(vs, vs[1:] + vs[:1]):
+                nb.setdefault(a, set()).add(b)
+                nb.setdefault(b, set()).add(a)
+                k = (min(a, b), max(a, b))
+                und[k] = und.get(k, 0) + 1
+        bedges = np.array([k for k, c in und.items() if c == 1], int).reshape(-1, 2)
+        bverts = set(bedges.ravel().tolist())
+        poles, hist = [], {}
+        for v, s in nb.items():
+            if v in bverts:
+                continue
+            n = len(s)
+            hist[n] = hist.get(n, 0) + 1
+            if n != 4:
+                poles.append((self.V[v].copy(), n))
+        tverts = []
+        if len(bedges):
+            from scipy.spatial import cKDTree
+            bv = np.array(sorted(bverts), int)
+            tree = cKDTree(self.V[bv])
+            A, B = self.V[bedges[:, 0]], self.V[bedges[:, 1]]
+            for (a, b), pa, pb in zip(bedges, A, B):
+                L = np.linalg.norm(pb - pa)
+                if L < 1e-9:
+                    continue
+                for i in tree.query_ball_point((pa + pb) / 2, L / 2 + tol):
+                    v = bv[i]
+                    if v in (a, b):
+                        continue
+                    t = float((self.V[v] - pa) @ (pb - pa)) / (L * L)
+                    if 0.01 < t < 0.99 and np.linalg.norm(pa + (pb - pa) * t - self.V[v]) < tol:
+                        tverts.append(self.V[v].copy())
+        return dict(poles=poles, valence=hist, tverts=tverts)
 
     def uv_stretch(self):
         """Равномерность развёртки по островам: отношение длины ребра в 3D к длине в UV (мм/мм).

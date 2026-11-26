@@ -37,6 +37,9 @@ def quad_stats(p, aspect_max=8.0):
              uv_stretch_min=round(min((v[0] for v in st.values()), default=1.0), 3),
              uv_stretch_max=round(max((v[1] for v in st.values()), default=1.0), 3),
              thickness=q.thickness, two_sided=q.two_sided)
+    topo = q.topology()
+    c.update(tverts=len(topo["tverts"]), poles=len(topo["poles"]),
+             valence={int(k): int(v) for k, v in sorted(topo["valence"].items())})
     return c
 
 
@@ -89,7 +92,8 @@ def export_quads(model, out_dir, atlas_px=None):
         dyn = p.dynamics if isinstance(p.dynamics, (str, type(None))) else "custom"
         entries[p.key] = dict(key=p.key, pos=p.pos, name=p.name, finish=p.finish, group=p.group, mesh="quad",
                               bbox_mm=[*map(float, lo), *map(float, hi)], stats=st, colored=base is not None,
-                              two_sided=q.two_sided, layer=p.layer, dynamics=dyn, **FINISHES[p.finish])
+                              two_sided=q.two_sided, layer=p.layer, dynamics=dyn, variant=p.info.get("variant"),
+                              **FINISHES[p.finish])
     npz = os.path.join(out_dir, "quads.npz")
     np.savez_compressed(npz, **arrays)
     bake_detail(model, parts, atlas, out_dir)

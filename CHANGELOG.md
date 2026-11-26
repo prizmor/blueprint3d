@@ -6,6 +6,21 @@ Every pull request that changes the tool adds a line under **Unreleased** (CI ch
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-27
+
+### Added
+- One-piece garments: `Outfit.hood` (worn or lying on the back, welded to the bodice neckline by a shared row), `drawstring`, `kangaroo_pocket`, `cargo_pocket` (volume, flap, snaps), `panel_at`; `panel(bulge, sides, patch, trapezoid u)`; `binding` on open edges (hood `opening`).
+- Cut-outs in quad shells: `Outfit.cutout` (ellipse, rect, slit; quads around the hole, contour as an edge); `Patch.mask`, `Patch.cells`.
+- Topology check: `QuadMesh.topology` (poles, valence histogram, T-vertices); `check` reports T-vertices as errors and poles near bend joints (`BEND_R` = 45 mm) as warnings; build report `tverts`, `poles`, `valence`.
+- Variants of parts: `Model.add(variant="group:name")` / `Outfit.add(variant=…)`, `Model.variant_groups`, `inactive`, `variants_exclusive`; `render --variant`, `views[].variant`, `sections[].variant`; manifest `variant`; `posetest` does not compare variants of one group.
+- `bodice(drape, drape_taper)` — hanging form; `sleeve(smooth, crease)`; `Piece.patch_regions`; `Body.torso_ring/torso_grid(phase)`.
+- Sample `examples/garment_hoodie` (hooded top with both hood variants, cargo shorts); `garment_folds` shows a back cut-out with binding.
+
+### Changed
+- **[hash]** `pants()` builds a gusset along the inseam by default (`crotch="gusset"`): two 5-edge poles instead of one 6-edge pole at the front and back of the crotch; `crotch="point"` keeps the former layout.
+- **[hash]** `mesh.py` changed (cell masks, topology report): approval hashes of all quad objects change, hard-surface ones included.
+- **[hash]** Fold refinement caps density by the larger of the neighbouring steps (splits no longer get 1:9 quads); `band()` resamples the edge by the smallest profile step.
+
 ## [0.5.0] - 2026-11-26
 
 ### Added
@@ -54,6 +69,7 @@ First public release as a standalone repository.
 - Project config `bp3d.json` for sheet defaults; `BP3D_BLENDER`, `BP3D_BROWSER`, `BP3D_MPFB` environment variables.
 - Installers for Windows (`scripts/install.ps1`), Linux/macOS (`scripts/install.sh`) and MPFB (`scripts/install_mpfb.ps1`).
 
-[Unreleased]: https://github.com/prizmor/blueprint3d/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/prizmor/blueprint3d/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/prizmor/blueprint3d/releases/tag/v0.6.0
 [0.5.0]: https://github.com/prizmor/blueprint3d/releases/tag/v0.5.0
 [0.4.0]: https://github.com/prizmor/blueprint3d/releases/tag/v0.4.0

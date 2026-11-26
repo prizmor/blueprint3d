@@ -369,7 +369,7 @@ def run(model, poses=None):
             regA, dynA = _regions_for(rig, A.key, rig.W[A.key])
             lo, hi = posed[A.key].min(axis=0), posed[A.key].max(axis=0)
             for Bp in parts:
-                if Bp is A or Bp.layer <= A.layer or not A.layer:
+                if Bp is A or Bp.layer <= A.layer or not A.layer or rig.model.variants_exclusive(A, Bp):
                     continue
                 Vq = posed[Bp.key]
                 near = np.nonzero(((Vq > lo - 15) & (Vq < hi + 15)).all(axis=1))[0]

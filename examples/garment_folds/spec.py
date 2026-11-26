@@ -8,7 +8,8 @@
   - свободный крой: свобода по зонам ноги и по сторонам (leg_ease, leg_around), натяжение через впадины
     (leg_tent) и ограничение свободы у паха (crease);
   - привязку свободной вещи через прокси-тело (bind="loose") и облегающей — по коже (bind="tight");
-  - окантовку (binding), пояс-резинку с рубчиком (waistband), детали кроссовка (sneaker_details).
+  - окантовку (binding), пояс-резинку с рубчиком (waistband), детали кроссовка (sneaker_details);
+  - вырез в квадовой оболочке (cutout) с окантовкой по его краю.
 Пробный объект: состав, длины и цвета — предложение. Мм; Z вверх от пола, перёд персонажа — −X.
 """
 import numpy as np
@@ -30,8 +31,11 @@ def build_model():
     # майка: облегает тело, узкие лямки (shoulder_out внутрь), глубокая пройма; кромки — окантовкой
     top = O.bodice(layer=1, bottom=("waist", 10), neck="round", neck_depth=75, neck_width=150, shoulder_out=-40,
                    armhole_drop=40, ease=0.5, tent=0.6, name="tank")
+    # вырез-капля на спине (cutout): ячейки внутри убраны, край — по эллипсу, вокруг квады; кромка — окантовкой
+    zk = (LM["armpit"] + LM["waist"]) / 2 - 40
+    O.cutout(top, BODY.closest(np.array([[BODY.center_x(zk) + 200.0, 0.0, zk]]))["point"][0], (64, 80), name="keyhole")
     O.add("tank", 1, "Майка", "Трикотаж", top, finish="cloth", color="white", layer=1, hides=True, bind="tight")
-    for edge in ("neck", "armhole_L", "armhole_R"):
+    for edge in ("neck", "armhole_L", "armhole_R", "keyhole"):
         O.add(f"tank_bind_{edge}", 2, "Окантовка", "Трикотаж", O.binding(top, edge, width=8), finish="cloth",
               color="slate", layer=1, count=False)
 

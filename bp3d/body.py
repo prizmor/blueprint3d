@@ -520,26 +520,28 @@ class Body:
         zs, xs = self._axis_table
         return float(np.interp(z, zs, xs))
 
-    def torso_ring(self, z, n=48, offset=0.0, tent=0.0, smooth=1.0, down=False, legs=True):
+    def torso_ring(self, z, n=48, offset=0.0, tent=0.0, smooth=1.0, down=False, legs=True, phase=0.0):
         """Кольцо туловища на высоте z (ниже паха — огибающая обеих ног: tent подтягивается к 1).
         Начало кольца — середина спины. down=True — обход для сетки, идущей сверху вниз (юбка, лиф от
-        плеч к талии): нормаль остаётся наружу."""
+        плеч к талии): нормаль остаётся наружу. phase — сдвиг точек по кругу в шагах (0.5 — середины спины
+        и переда приходятся на ребро, а не на точку: так ставится ластовица брюк)."""
         regions = ("torso", "head", "leg_L", "leg_R") if legs else ("torso", "head")
         if z < self.lm["crotch"] + 15:
             tent = max(tent, 1.0)
         elif z < self.lm["crotch"] + 60:
             tent = max(tent, 1.0 - (z - self.lm["crotch"] - 15) / 45.0)
+        th = (np.arange(n) + phase) * 2 * np.pi / n if phase else None
         return self.ring((self.center_x(z), 0.0, z), (0, 0, -1) if down else (0, 0, 1), (1, 0, 0), n, regions,
-                         "far", tent, smooth, offset)[0]
+                         "far", tent, smooth, offset, thetas=th)[0]
 
-    def torso_grid(self, zs, nu=48, offset=0.0, tent=0.0, smooth=1.0, legs=True):
+    def torso_grid(self, zs, nu=48, offset=0.0, tent=0.0, smooth=1.0, legs=True, phase=0.0):
         """Сетка (nu, nv, 3) на туловище: кольца на высотах zs плюс отступ. offset, tent — число, массив
         по высотам (nv,) или функция z -> число: плотно на талии, свободнее на груди. Порядок zs задаёт
         направление сетки: по возрастанию — снизу вверх, по убыванию — сверху вниз."""
         zs = np.asarray(zs, float)
         down = zs[-1] < zs[0]
         val = lambda p, j, z: (p(z) if callable(p) else (p[j] if np.ndim(p) else p))
-        return np.stack([self.torso_ring(z, nu, val(offset, j, z), val(tent, j, z), smooth, down, legs)
+        return np.stack([self.torso_ring(z, nu, val(offset, j, z), val(tent, j, z), smooth, down, legs, phase)
                          for j, z in enumerate(zs)], axis=1)
 
     # ------------------------------------------------------------ конечности

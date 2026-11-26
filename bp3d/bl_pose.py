@@ -6,7 +6,8 @@ shots.json: {"shots": [{"name", "pose": {кость: 16 чисел 4×4 в ко�
 "solid" | "wire" | "toon" | "matte" | "inspect", "dir": [x, y, z] (откуда смотрит камера, оси Blender), "target":
 [x, y, z] мм в координатах персонажа или null (вся фигура), "radius": мм, "res": [w, h], "parts": [ключи деталей]
 или null (все)}]}. "inspect" — осмотр формы: светлый матовый материал с картой нормалей вещи и свет со всех сторон,
-включая снизу (тёмная палитра прячет вмятины, швы и щели); parts — показать только эти детали."""
+включая снизу (тёмная палитра прячет вмятины, швы и щели); parts — показать только эти детали; hide — скрыть
+эти детали (невыбранные варианты)."""
 import bpy, json, math, os, sys
 import numpy as np
 from mathutils import Vector, Matrix
@@ -303,6 +304,10 @@ for sh in sorted(cfg["shots"], key=lambda s: order[s.get("mode", "solid")]):
     mode = sh.get("mode", "solid")
     apply_pose(sh.get("pose") or {})
     wires, saved, shown = [], {}, {}
+    if sh.get("hide"):                                   # невыбранные варианты деталей
+        for o in [o for o in sc.objects if o.type == "MESH" and o.name.split(".")[0] in set(sh["hide"])]:
+            shown[o.name] = o.hide_render
+            o.hide_render = True
     if sh.get("parts"):                                  # только эти детали (и без тела, если его не просили)
         want = set(sh["parts"])
         for o in [o for o in sc.objects if o.type == "MESH"]:

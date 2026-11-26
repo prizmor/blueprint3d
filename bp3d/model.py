@@ -76,9 +76,13 @@ class Model:
     atlas_px: int = 2048    # сторона атласа текстур квадовых деталей, px (цвет, нормали, маска складок)
 
     def add(self, key, pos, name, material, shape, finish="paint", group="ext", note="", count=True,
-            mesh=None, bind=None, dynamics=None, layer=0, hides=None, color=None, pattern=None, info=None):
+            mesh=None, bind=None, dynamics=None, layer=0, hides=None, color=None, pattern=None, info=None,
+            variant=None):
         """shape — тело build123d (CAD-триангуляция в 3D) или QuadMesh (квадовый меш в 3D, на чертёж —
-        B-rep из тех же сеток). Остальные поля — см. Part."""
+        B-rep из тех же сеток). Остальные поля — см. Part. variant="группа:имя" — вариант детали (капюшон
+        надет / на спине, рукав опущен / закатан): в игре виден один вариант группы; по умолчанию — первый."""
+        if variant is not None and (not isinstance(variant, str) or variant.count(":") != 1):
+            raise ValueError(f"{key}: variant — строка «группа:имя», а не {variant!r}")
         if any(p.key == key for p in self.parts):
             raise ValueError(f"duplicate part key {key}")
         if finish not in FINISHES:
@@ -93,9 +97,42 @@ class Model:
         if mesh == "cad":
             quad = None
         rgb(color)
+        info = dict(info or {})
+        if variant:
+            info["variant"] = variant
         self.parts.append(Part(key, pos, name, material, shape, finish, group, note, count, mesh, quad, bind,
-                               dynamics, layer, hides, color, pattern, dict(info or {})))
+                               dynamics, layer, hides, color, pattern, info))
         return shape
+
+    # ------------------------------------------------------------ варианты деталей
+    def variant_groups(self):
+        """{группа: [имена вариантов по порядку объявления]}."""
+        g = {}
+        for p in self.parts:
+            v = p.info.get("variant")
+            if v:
+                grp, nm = v.split(":", 1)
+                g.setdefault(grp, [])
+                if nm not in g[grp]:
+                    g[grp].append(nm)
+        return g
+
+    def inactive(self, choose=()):
+        """Ключи деталей невыбранных вариантов. В группе выбран первый вариант; choose — ["hood:down", ...]."""
+        sel = {grp: names[0] for grp, names in self.variant_groups().items()}
+        for c in ([choose] if isinstance(choose, str) else (choose or ())):
+            grp, nm = c.split(":", 1)
+            if grp not in sel or nm not in self.variant_groups()[grp]:
+                raise ValueError(f"нет варианта {c!r}; есть: " + ", ".join(f"{g}:{n}" for g, ns in self.variant_groups().items() for n in ns))
+            sel[grp] = nm
+        return {p.key for p in self.parts if p.info.get("variant") and p.info["variant"] != "{}:{}".format(
+            p.info["variant"].split(":")[0], sel[p.info["variant"].split(":")[0]])}
+
+    @staticmethod
+    def variants_exclusive(a, b):
+        """Детали — разные варианты одной группы (вместе не надеваются: их не сравнивают друг с другом)."""
+        va, vb = a.info.get("variant"), b.info.get("variant")
+        return bool(va and vb and va != vb and va.split(":")[0] == vb.split(":")[0])
 
     def ext(self):
         return [p for p in self.parts if p.group == "ext"]
