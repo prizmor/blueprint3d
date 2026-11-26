@@ -146,7 +146,7 @@
 
 ### `out/render/render.json` (одежда)
 
-`{pose, renders: [png names], spec_hash, draft}`. Кадры: `<pose>_toon`, `<pose>_toon_back` и без `--hero-only` — `<pose>_toon_side`, `rest_toon`, `<pose>_matte`, `<pose>_wire`.
+`{pose, renders: [png names], spec_hash, draft}` (с `--inspect` пишутся только шесть `inspect_*.png`, без `render.json`). Кадры: `<pose>_toon`, `<pose>_toon_back` и без `--hero-only` — `<pose>_toon_side`, `rest_toon`, `<pose>_matte`, `<pose>_wire`.
 
 ## Результат проверки поз (`out/posetest/`)
 

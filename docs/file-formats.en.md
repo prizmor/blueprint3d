@@ -146,7 +146,7 @@ Map it to the engine's spring-bone component (UniVRM SpringBone, Magica Cloth Bo
 
 ### `out/render/render.json` (garments)
 
-`{pose, renders: [png names], spec_hash, draft}`. Shots: `<pose>_toon`, `<pose>_toon_back`, and without `--hero-only` `<pose>_toon_side`, `rest_toon`, `<pose>_matte`, `<pose>_wire`.
+`{pose, renders: [png names], spec_hash, draft}` (with `--inspect` only the six `inspect_*.png` are written, no `render.json`). Shots: `<pose>_toon`, `<pose>_toon_back`, and without `--hero-only` `<pose>_toon_side`, `rest_toon`, `<pose>_matte`, `<pose>_wire`.
 
 ## Pose test output (`out/posetest/`)
 

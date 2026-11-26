@@ -178,7 +178,7 @@ All run inside Blender, read `sys.argv` after `--`, and print a marker at the en
 | `bl_build.py` | `build` | import CAD glTF, match objects to parts, weld, check size deviation (> 3 mm warns), quad objects, atlas, `internal` collection, rotate to Blender axes, Workbench check renders, `.blend`/`.fbx`/`.glb`, `report.json` |
 | `bl_garment.py` | `build` (garments) | body + armature + spring bones, skinned garment meshes (vertex groups from `WI`/`WW`), rigid CAD parts, `Body_masked`, renders, FBX with armature |
 | `bl_render.py` | `render` | Cycles presentation: floor, softboxes, materials by finish, paint colour, six shots, `_lookdev.blend` |
-| `bl_pose.py` | `posetest`, `render` (garments) | applies bone matrices, renders solid/wire/matte/toon (EEVEE two-step shading, inverted-hull outline) |
+| `bl_pose.py` | `posetest`, `render` (garments) | applies bone matrices, renders solid/wire/matte/toon (EEVEE two-step shading, inverted-hull outline) and inspect (light matte material with the garment's normal map, light from all sides, only the shot's `parts`) |
 | `bl_body.py` | `body.load` | body file → npz in CAD space (mm), weights per bone |
 | `bl_inspect.py` | manual use | close-ups of parts (fill + wireframe) with the scene camera |
 | `bl_mannequin.py` | `mannequin --kind dummy` | builds `dummy_t` from npz parts and skeleton |

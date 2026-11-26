@@ -393,6 +393,21 @@ def cmd_render_garment(obj, args, blend):
     rig = Rig(model)
     out = os.path.abspath(args.out) if args.out else os.path.join(obj, "out", "render")
     pose = args.pose or "hero"
+    if getattr(args, "inspect", ""):
+        # осмотр формы деталей: светлый материал, свет со всех сторон, шесть ракурсов, поза покоя (или --pose)
+        parts = [k.strip() for k in args.inspect.split(",") if k.strip()]
+        keys = {p.key for p in model.parts}
+        miss = [k for k in parts if k not in keys]
+        if miss:
+            sys.exit("нет деталей: " + ", ".join(miss) + "; есть: " + ", ".join(sorted(keys)))
+        M = PT.bone_matrices(rig, args.pose) if args.pose else {}
+        views = dict(front=(0.7, -1, 0.6), back=(-0.7, 1, 0.5), left=(1, 0, 0.2), right=(-1, 0, 0.2), top=(0.3, -0.4, 1),
+                     bottom=(0.3, -0.4, -1))
+        shots = [dict(name=f"inspect_{v}", pose=M, mode="inspect", dir=d, res=(1100, 1000), parts=parts)
+                 for v, d in views.items()]
+        _run_pose(blend, shots, out)
+        print(f"осмотр деталей {', '.join(parts)} (6 ракурсов): {out}  ({time.time() - t:.0f} с)")
+        return
     M = PT.bone_matrices(rig, pose)
     shots = [dict(name=f"{pose}_toon", pose=M, mode="toon", dir=(0.55, -1, 0.12), res=(1400, 1900)),
              dict(name=f"{pose}_toon_back", pose=M, mode="toon", dir=(-0.6, 1, 0.15), res=(1400, 1900))]
@@ -654,6 +669,8 @@ def main():
     s.add_argument("--model", default="", help="другой .blend (например, черновая сборка)")
     s.add_argument("--out", default="", help="папка результата")
     s.add_argument("--pose", default="", help="одежда: поза показа (по умолчанию hero), см. posetest.POSES")
+    s.add_argument("--inspect", default="", help="одежда: осмотр формы деталей (ключи через запятую) — светлый материал, "
+                                                 "свет со всех сторон, шесть ракурсов")
     add("status", "состояние апрува")
     s = add("posetest", "одежда в наборе поз: проникновения и рендеры худших случаев")
     s.add_argument("--poses", nargs="*", default=[], help="только эти позы")

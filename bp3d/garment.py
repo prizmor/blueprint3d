@@ -1082,36 +1082,56 @@ class Outfit:
 
     # ------------------------------------------------------------ ленты и банты
     def ribbon(self, path, width=22.0, t=0.8, normal=None, taper=0.75, rows=None, name="ribbon", clear=9.0, over=(),
-               across=3, conform=False):
+               across=3, conform=False, arc=0.0, ends=0.0, side=None, conform_on=None):
         """Лента вдоль ломаной path (n, 3): полоса шириной width. normal — куда смотрит лицевая сторона
         (по умолчанию от тела); taper — ширина на конце относительно начала. Сетка идёт вдоль ленты (v),
         поэтому динамика задаётся одной цепочкой: dynamics=dict(preset="soft", chains=1, bones=3).
         across — точек поперёк (3 — плоская полоса); conform — прижать ленту к вещам over (язычок, накладка,
         ремешок на выпуклой поверхности): точки, лежащие над их поверхностью по нормали не дальше 12 мм,
-        садятся на неё с зазором; свободные участки (за краем вещи) остаются как есть."""
+        садятся на неё с зазором; свободные участки (за краем вещи) остаются как есть. arc — изгиб поперёк:
+        края ниже середины на arc мм (язычок, ремешок вокруг руки); ends — концы скруглены на этой длине, мм;
+        side — постоянное направление поперёк ленты (петля, загиб через край: нормаль там вырождается);
+        conform_on — к каким вещам прижимать (по умолчанию over): через остальные из over лента только
+        перекидывается (язычок через кант). При прижиме нормаль ленты берётся с поверхности, а не с тела."""
         step = 18.0 if across <= 3 else min(18.0, 1.5 * width / (int(across) - 1))   # квады не вытянуты вдоль ленты
         P = resample_open(np.asarray(path, float), rows or max(4, int(np.linalg.norm(np.diff(path, axis=0), axis=1).sum() / step) + 1))
         n = len(P)
         T = np.gradient(P, axis=0)
         T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-12)
-        if normal is None:
-            h = self.B.closest(P)
-            N = P - h["point"]
+        if side is not None:                                       # поперёк — задано: нормаль из него
+            S = np.broadcast_to(np.asarray(side, float), (n, 3)).copy()
+            S -= T * (S * T).sum(axis=1, keepdims=True)
+            S /= np.maximum(np.linalg.norm(S, axis=1, keepdims=True), 1e-12)
+            N = np.cross(S, T)
         else:
-            N = np.broadcast_to(np.asarray(normal, float), (n, 3)).copy()
-        N -= T * (N * T).sum(axis=1, keepdims=True)
-        N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
-        S = np.cross(T, N)
+            if normal is None and conform and (conform_on or over):
+                N = self.surface_of(list(conform_on or over)).closest(P, k=8)["normal"].copy()
+            elif normal is None:
+                h = self.B.closest(P)
+                N = P - h["point"]
+            else:
+                N = np.broadcast_to(np.asarray(normal, float), (n, 3)).copy()
+            N -= T * (N * T).sum(axis=1, keepdims=True)
+            N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+            S = np.cross(T, N)
         wd = width / 2 * np.linspace(1.0, taper, n)
+        if ends > 0:                                               # скруглённые концы: ширина по дуге окружности
+            L_ = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))])
+            e_ = np.minimum(L_, L_[-1] - L_) / ends
+            wd = wd * np.maximum(np.sqrt(np.clip(1.0 - (1.0 - np.clip(e_, 0.0, 1.0)) ** 2, 0.0, 1.0)), 0.3)
         k = np.linspace(-1.0, 1.0, max(3, int(across)))
-        G = np.stack([P + S * (wd * c)[:, None] for c in k], axis=0)
+        G = np.stack([P + S * (wd * c)[:, None] - N * (arc * c * c) for c in k], axis=0)
         if conform and over:                                       # сесть на выпуклую вещь под лентой
             Q = G.reshape(-1, 3)
-            h = self.surface_of(over).closest(Q, k=8)
+            h = self.surface_of(list(conform_on or over)).closest(Q, k=8)
+            # садятся точки, лежащие НАД поверхностью по нормали самой ленты (сбоку от ближайшей точки не дальше
+            # трети расстояния); за краем вещи ближайшая точка — на кромке, сбоку, и точка остаётся свободной
             d = Q - h["point"]
             dl = np.linalg.norm(d, axis=1)
-            along = np.abs(np.einsum("ij,ij->i", d, h["normal"]))
-            m = (dl < 12.0) & (along > 0.8 * dl)
+            Nr = np.broadcast_to(N[None], G.shape).reshape(-1, 3)
+            sN = np.einsum("ij,ij->i", d, Nr)
+            lat = np.linalg.norm(d - Nr * sN[:, None], axis=1)
+            m = (dl < 12.0) & (lat < np.maximum(3.0, 0.35 * dl))
             Q[m] = h["point"][m] + h["normal"][m] * (t + 0.6)
             G = Q.reshape(G.shape)
         if clear is not None:                                      # лента не входит в тело: зазор clear мм
@@ -1167,7 +1187,7 @@ class Outfit:
     # ------------------------------------------------------------ обувь
     def shoe(self, side, shaft=0.9, layer=2, ease=3.0, t=2.0, sole=10.0, welt=3.0, toe=0.30, toe_height=32.0,
              cols=24, name=None, rand=8.0, fit="rigid", flex=24.0, ankle_room=6.0, shaft_bend=None, bend_rings=6,
-             stations=13, sole_stations=27):
+             stations=13, sole_stations=27, nose=0.7, rand_fade=22.0):
         """Обувь — ботинок или сапог на КОЛОДКЕ: форма стопы у обуви своя, фиксированная, а не обтяжка стопы
         (обтяжка повторяла пальцы и свод). Голенище (от параметра ноги shaft: 0.9 — чуть выше щиколотки,
         0.7 — до середины голени) и изгиб у щиколотки идут по ноге; от подъёма до носка — колодка:
@@ -1184,7 +1204,10 @@ class Outfit:
         с костями. Горловина шире на ankle_room мм к верхнему краю — место голени при сгибе щиколотки.
         "skin" — прежняя привязка весами ноги.
         Плотность: bend_rings — колец в веере изгиба у щиколотки, stations — сечений колодки, sole_stations —
-        сечений подошвы (мало — ботинок гранёный). Детали поверх — shoe_overlays, sneaker_details, shoe_tread."""
+        сечений подошвы (мало — ботинок гранёный). nose — нос круглый: последние сечения сходятся к кончику
+        по четверти эллипса глубиной не меньше nose × полуразмера сечения (None — прежний веер в точку);
+        rand_fade — на скольких мм у пятки и носка бортик подошвы сходит на нет.
+        Детали поверх — shoe_overlays, sneaker_details, shoe_tread."""
         from .body import plane_segments
         from .mesh import _orient_like_first
         B = self.B
@@ -1262,8 +1285,26 @@ class Outfit:
             ex_ = np.where(dz >= 0, n_top, n_bot)
             r = (np.abs(dy / w) ** ex_ + np.abs(dz / hz) ** ex_) ** (-1.0 / ex_)
             last.append(np.stack([np.full(cols, xs[k]), yc[k] + r * dy, zc + r * dz], axis=1))
+        if nose:
+            # нос: сечения у самого кончика отбрасываются, пока до кончика не останется nose × полуразмера, затем
+            # три кольца сходятся к кончику по четверти эллипса — без веера рядов в точку и складок на свету
+            while len(last) > 2:
+                R_ = last[-1]
+                rr = min(np.ptp(R_[:, 1]), np.ptp(R_[:, 2])) / 2
+                if R_[0, 0] - x_tip >= nose * rr:
+                    break
+                last.pop()
+            R_ = last[-1]
+            c_ = R_.mean(axis=0)
+            a_ = R_[0, 0] - x_tip
+            for ph in np.radians([28.0, 52.0, 74.0]):
+                Q_ = c_ + (R_ - c_) * math.cos(ph)
+                Q_[:, 0] = R_[0, 0] - a_ * math.sin(ph)
+                last.append(Q_)
+            tip = np.array([x_tip, c_[1], c_[2]])
+        else:
+            tip = np.array([x_tip, yc[-1], zb + min(hb[-1] + off, toe_height) * 0.3])
         Gl = np.stack(last, axis=1)
-        tip = np.array([x_tip, yc[-1], zb + min(hb[-1] + off, toe_height) * 0.3])
         G = np.concatenate([G, Gl, np.repeat(tip[None, None, :], cols, axis=0)], axis=1)   # полюс носка
         tube = self._outward(Patch(G, closed_u=True, name=name))
         upper = QuadMesh.from_patches([tube]).solidify(t)
@@ -1277,7 +1318,7 @@ class Outfit:
         # поднимается по стенке верха — подошва состыкована с верхом, а не приклеена снизу плоской плитой.
         from .mesh import _find
         low = tube.G.reshape(-1, 3)
-        low = low[low[:, 2] < rand]                                   # след верха на высоте бортика
+        low = low[low[:, 2] < rand + 12.0]                            # след верха (с круглым носом) в плане
         # контур подошвы в плане: выпуклая оболочка следа, отодвинутая на рант welt и скруглённая (Чайкин) —
         # без ступенек и выемок, пятка и носок круглые сами собой
         poly = _sole_outline(low[:, :2], welt)
@@ -1290,15 +1331,18 @@ class Outfit:
         for k, x in enumerate(sx):
             e = min(abs(x - x0), abs(x - x1))
             W = half[k]                                               # уже с рантом
-            zt = zf + 0.8 + rand * float(smoothstep(min(1.0, e / 30.0)))    # бортик сходит на нет к концам
+            zt = zf + 0.8 + rand * float(smoothstep(min(1.0, e / max(rand_fade, 1e-3))))   # бортик сходит на нет у концов
             Wi = W - min(welt + 1.0, W * 0.45)                        # внутренний край бортика — в толще стенки верха
             pts = ([(y, -sole) for y in np.linspace(-W, W, nb + 1)] + [(W, (zt - sole) / 2), (W, zt)]
                    + [(y, zf) for y in np.linspace(Wi, -Wi, nb + 1)] + [(-W, zt), (-W, (zt - sole) / 2)])
             srings.append(np.array([(x, mid[k] + y, z) for y, z in pts]))
         ns_ = len(srings[0])
-        c0, c1 = srings[0].mean(axis=0), srings[-1].mean(axis=0)
-        c0[0], c1[0] = x0, x1
-        Gs = np.stack([np.repeat(c0[None], ns_, axis=0)] + srings + [np.repeat(c1[None], ns_, axis=0)], axis=1)
+        # концы подошвы сходятся в вертикальную линию по оси (а не в точку посередине высоты): у пятки и носка
+        # нет веера рядов и смятых углов
+        e0, e1 = srings[0].copy(), srings[-1].copy()
+        e0[:, 0], e0[:, 1] = x0, srings[0][:, 1].mean()
+        e1[:, 0], e1[:, 1] = x1, srings[-1][:, 1].mean()
+        Gs = np.stack([e0] + srings + [e1], axis=1)
         sm_ = QuadMesh.from_patches([Patch(Gs, closed_u=True, name=name + "_sole")])
         _orient_like_first(sm_)
         _fix_outward(sm_)
@@ -1405,6 +1449,64 @@ class Outfit:
                 Ts.append(mm.triangles() + n0)
                 n0 += len(mm.V)
         return Surface(np.vstack(Vs), np.vstack(Ts))
+
+    def _shoe_lacing(self, shoe, tongue_w, eyestay, eyelets, over, nm, blocks):
+        """Язычок и накладки под люверсы — панели (panel) на сетке ботинка: повторяют его поверхность и не
+        мнутся. Язычок — по середине подъёма от канта до шнуровки, накладки — поверх его краёв с перекрытием
+        3 мм, люверсы — по их середине. Шнуровка кончается за 8 мм до накладок over (носка).
+        Возвращает (язычок, [накладки], люверсы слева, справа (снизу вверх), нормали у люверсов)."""
+        G = shoe.grid.G
+        nu, nv = G.shape[:2]
+        psi = np.asarray(shoe.col_psi, float)
+        i_f = int(np.argmin(np.abs(((psi - 90.0 + 180.0) % 360.0) - 180.0)))      # колонка середины подъёма
+        zc = G[i_f, :, 2]
+        v_top = float(np.interp(-(zc[0] - 9.0), -zc[: shoe.nleg], np.arange(shoe.nleg))) / (nv - 1)   # под кантом
+        j_end = shoe.nleg + 2
+        if over:                                                    # шнуровка кончается до носка-накладки
+            d = np.abs(self.surface_of(list(over)).closest(G[i_f, : nv - 2], k=8)["dist"])
+            near = np.nonzero(d < 8.0)[0]
+            if len(near):
+                j_end = min(j_end, int(near[0]) - 1)
+        v_end = max(j_end, int(v_top * (nv - 1)) + 3) / (nv - 1)
+        jm = int(round((v_top + v_end) / 2 * (nv - 1)))
+        ring = G[:, jm]
+        seg = np.linalg.norm(np.roll(ring, -1, axis=0) - ring, axis=1)         # дуга от колонки i к i + 1
+
+        def u_at(dmm):                                              # доля u на дуге dmm от середины подъёма
+            sgn = 1 if dmm >= 0 else -1
+            k = np.arange(nu)
+            steps = seg[(i_f + k) % nu] if sgn > 0 else seg[(i_f - k - 1) % nu]
+            cum = np.concatenate([[0.0], np.cumsum(steps)])
+            f = float(np.interp(abs(dmm), cum, np.arange(nu + 1)))
+            return (i_f + sgn * f) / nu
+        tt = 2.0
+        tg = self.panel(shoe, (u_at(-tongue_w / 2), u_at(tongue_w / 2)), (v_top, v_end), t=tt, stitch=2.0,
+                        name=f"{nm}_tongue")
+        stays = []
+        if eyestay > 0:
+            d0, d1 = tongue_w / 2 - 3.0, tongue_w / 2 - 3.0 + eyestay
+            for sgn, tag in ((1.0, "l"), (-1.0, "r")):
+                ua, ub = sorted((u_at(sgn * d0), u_at(sgn * d1)))
+                stays.append(self.panel(shoe, (ua, ub), (v_top, v_end), t=1.4, gap=0.3 + tt + 0.4, stitch=2.0,
+                                        name=f"{nm}_eyestay_{tag}"))
+            dc = (d0 + d1) / 2
+            under = stays
+        else:
+            dc = tongue_w / 2 + 5.0
+            under = [shoe, tg]
+        vv = np.linspace(v_end - 0.1 * (v_end - v_top), v_top + 0.12 * (v_end - v_top), eyelets)   # снизу вверх
+        Nn = shoe.grid.normals()
+        out_ = []
+        for sgn in (1.0, -1.0):
+            uu = np.full(eyelets, u_at(sgn * dc))
+            P = _grid_at(G, True, uu, vv)
+            Nr = _grid_at(Nn, True, uu, vv)
+            Nr /= np.maximum(np.linalg.norm(Nr, axis=1, keepdims=True), 1e-12)
+            out_.append((self.drop_on(P + Nr * 20.0, under, clear=0.6), Nr))
+        (L, nL), (R, nR) = out_
+        n_e = nL + nR
+        n_e /= np.maximum(np.linalg.norm(n_e, axis=1, keepdims=True), 1e-12)
+        return tg, stays, L, R, n_e
 
     def _shoe_u(self, shoe, a, b):
         """Доли сетки ботинка (u0, u1) для дуги углов от a до b по возрастанию угла (см. Piece.col_psi)."""
@@ -1793,44 +1895,36 @@ class Outfit:
             prof = [(0.5, -7.0), (3.5, -4.0), (4.5, 0.0), (3.0, 3.5), (0.5, 5.0)]
             pc = self.band(shoe.edges["top"], prof, closed=True, up=(0, 0, 1), t=1.6, name=f"{nm}_collar")
             blocks.append(pc)
-        # язычок: полоса по подъёму, выше канта на 14 мм, лежит на ботинке
-        top_ext = fl[0] + (fl[0] - fl[1]) / np.linalg.norm(fl[0] - fl[1]) * 14.0
-        path = np.vstack([top_ext, fl[:-2]])[::-1]                  # снизу вверх
-        tg = self.ribbon(path, width=tongue_w, t=2.2, normal=None, taper=1.05, name=f"{nm}_tongue", clear=None,
-                         over=[shoe] + list(over), across=7, conform=True)
-        blocks.append(tg)
-        # люверсы и шнурки: ряды по обе стороны язычка
-        idx = np.linspace(2, len(fl) - 3, eyelets).astype(int)[::-1]
-        off = tongue_w / 2 + 5.0
-        under = [shoe, tg] + list(over)
-        if eyestay > 0:                                             # накладки под люверсы — вплотную к краю язычка
-            off = tongue_w / 2 + eyestay / 2 + 0.5
-            j0, j1 = max(0, int(idx.min()) - 1), min(len(fl) - 1, int(idx.max()) + 1)
-            stays = []
-            for sgn, tag in ((1.0, "l"), (-1.0, "r")):
-                pth = fl[j0:j1 + 1] + side[j0:j1 + 1] * sgn * off
-                stays.append(self.ribbon(pth, width=eyestay, t=1.4, normal=None, taper=1.0, name=f"{nm}_eyestay_{tag}",
-                                         clear=None, over=[shoe] + list(over), across=5, conform=True))
-            blocks += stays
-            under = [shoe] + list(over) + stays
-        L = fl[idx] + side[idx] * off
-        R = fl[idx] - side[idx] * off
-        if eyestay > 0:                                             # люверсы — на накладке: опустить сверху на неё
-            L = self.drop_on(L + n[idx] * 20.0, under, clear=0.6)
-            R = self.drop_on(R + n[idx] * 20.0, under, clear=0.6)
-        else:
-            L, R = L + n[idx] * 2.0, R + n[idx] * 2.0
-        laces = self._lace(L, R, r=lace_r, lift=3.0, name=f"{nm}_lace", normals=n[idx])
+        if getattr(shoe, "grid", None) is not None:
+            tg, stays, L, R, n_e = self._shoe_lacing(shoe, tongue_w, eyestay, eyelets, over, nm, blocks)
+            blocks += [tg] + stays
+        else:                                                       # ботинок без сетки: язычок-лента по линии переда
+            top_ext = fl[0] + (fl[0] - fl[1]) / np.linalg.norm(fl[0] - fl[1]) * 14.0
+            path = np.vstack([top_ext, fl[:-2]])[::-1]
+            tg = self.ribbon(path, width=tongue_w, t=2.2, normal=None, taper=1.05, name=f"{nm}_tongue", clear=None,
+                             over=[shoe] + list(over))
+            blocks.append(tg)
+            idx = np.linspace(2, len(fl) - 3, eyelets).astype(int)[::-1]
+            off = tongue_w / 2 + 5.0
+            L = fl[idx] + side[idx] * off + n[idx] * 2.0
+            R = fl[idx] - side[idx] * off + n[idx] * 2.0
+            n_e = n[idx]
+        laces = self._lace(L, R, r=lace_r, lift=3.0, name=f"{nm}_lace", normals=n_e)
         for k, (pl, pr) in enumerate(zip(L, R)):
             for q, tag in ((pl, "l"), (pr, "r")):
-                ring = self.button(q, n[idx][k], r=3.2, h=1.6, name=f"{nm}_eyelet{k}{tag}", n=10).solid
+                ring = self.button(q, n_e[k], r=3.2, h=1.6, name=f"{nm}_eyelet{k}{tag}", n=10).solid
                 laces = laces.merged(ring)
         if pull_tab > 0:                                            # петля на пятке: полоса по заднику вверх за кант
             top = np.asarray(shoe.edges["top"], float)
             b = top[int(np.argmax(top[:, 0]))]
-            ptab = np.array([b + (0.0, 0.0, -22.0), b + (0.0, 0.0, -6.0), b + (3.0, 0.0, pull_tab * 0.55), b + (6.0, 0.0, pull_tab)])
-            blocks.append(self.ribbon(ptab, width=16.0, t=1.8, normal=(1.0, 0.0, 0.0), taper=0.9, name=f"{nm}_pull_tab",
-                                      clear=None, over=[shoe] + list(over)))
+            # петля: полоса поднимается по заднику за кант, загибается назад и спускается снаружи
+            ang = np.radians(np.linspace(0.0, 180.0, 9))
+            r_ = 4.5
+            arcp = [b + (r_ - r_ * math.cos(a), 0.0, pull_tab - r_ + r_ * math.sin(a)) for a in ang]
+            ptab = np.array([b + (0.0, 0.0, -22.0), b + (0.0, 0.0, -6.0), b + (0.0, 0.0, pull_tab - r_)] + arcp[1:]
+                            + [b + (2 * r_, 0.0, -4.0)])
+            blocks.append(self.ribbon(ptab, width=15.0, t=1.6, side=(0.0, 1.0, 0.0), taper=1.0, name=f"{nm}_pull_tab",
+                                      clear=None, over=[shoe] + list(over), rows=24))
         lp = Piece(solid=laces, name=f"{nm}_laces")
         lp.layer = getattr(shoe, "layer", 2) + 1
         lp.bind = getattr(shoe, "bind", None)                      # шнурки — той же жёсткой привязкой, что ботинок

@@ -109,7 +109,7 @@ Exit code is 0 even with open meshes or warnings — read the printed summary an
 ## render
 
 ```
-render <folder> [--color NAME] [--hero-only] [--model FILE.blend] [--out DIR] [--pose NAME]
+render <folder> [--color NAME] [--hero-only] [--model FILE.blend] [--out DIR] [--pose NAME] [--inspect KEYS]
 ```
 
 | Option | Default | Meaning |
@@ -119,6 +119,7 @@ render <folder> [--color NAME] [--hero-only] [--model FILE.blend] [--out DIR] [-
 | `--model` | first `out/model/*.blend` not containing `lookdev` | Model to render |
 | `--out` | `<folder>/out/render` | Output folder |
 | `--pose` | `hero` | Garments: pose for the shots |
+| `--inspect` | — | Garments: shape inspection of the listed parts (keys, comma-separated): light matte material with the garment's normal map, light from all sides including below, six views `inspect_front/back/left/right/top/bottom.png`; rest pose or `--pose` |
 
 Hard-surface: `bl_render.py` in Blender (user profile, not factory settings), Cycles, six shots; writes `render_<color>.json`. Garments: `bl_pose.py` — toon front/back (+ side, rest, matte, wireframe without `--hero-only`); writes `render.json`. Both copy `spec_hash` and `draft` from the model's `report.json`.
 
