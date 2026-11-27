@@ -119,13 +119,28 @@ def render_svg(svg_path, png_path, pdf_path, w_mm, h_mm):
                 f'@media print{{img{{width:{w_mm}mm;height:{h_mm}mm}}}}</style></head><body><img src="{name}"></body></html>')
     url = "file:///" + tmp.replace("\\", "/")
     if png_path:
-        subprocess.run([b, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
-                        f"--window-size={w_mm * px},{h_mm * px}", f"--screenshot={png_path}", url], capture_output=True)
+        _browser_run(b, ["--hide-scrollbars", "--force-device-scale-factor=1", f"--window-size={w_mm * px},{h_mm * px}",
+                         f"--screenshot={png_path}", url], png_path)
     if pdf_path:
-        subprocess.run([b, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", f"--print-to-pdf={pdf_path}", url],
-                       capture_output=True)
+        _browser_run(b, ["--no-pdf-header-footer", f"--print-to-pdf={pdf_path}", url], pdf_path)
     time.sleep(0.5)
     os.remove(tmp)
+
+
+def _browser_run(b, args, out, tries=3):
+    """Браузер без окна со своим временным профилем: параллельные запуски (два чертежа сразу, selftest рядом с
+    draw) не делят профиль — общий профиль давал пустые PNG без ошибки. Пустой или не появившийся файл —
+    повтор, после tries попыток — RuntimeError."""
+    import tempfile
+    for k in range(tries):
+        if os.path.exists(out):
+            os.remove(out)
+        with tempfile.TemporaryDirectory(prefix="bp3d_browser_") as prof:
+            subprocess.run([b, "--headless=new", "--disable-gpu", f"--user-data-dir={prof}"] + args, capture_output=True)
+            time.sleep(0.3)
+        if os.path.exists(out) and os.path.getsize(out) > 0:
+            return
+    raise RuntimeError(f"браузер не создал {out} за {tries} попытки")
 
 
 def cmd_check(obj, args):
@@ -507,11 +522,11 @@ def cmd_crop(obj, args):
         f.write('<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;overflow:hidden;background:#fff}'
                 f'img{{position:absolute;left:{-x * px}px;top:{-y * px}px;width:{W * px}px;height:{H * px}px}}</style></head>'
                 f'<body><img src="{os.path.basename(svg)}"></body></html>')
-    subprocess.run([b, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
-                    f"--window-size={int(w * px)},{int(h * px)}", f"--screenshot={out}",
-                    "file:///" + tmp.replace("\\", "/")], capture_output=True)
-    time.sleep(0.3)
-    os.remove(tmp)
+    try:
+        _browser_run(b, ["--hide-scrollbars", "--force-device-scale-factor=1", f"--window-size={int(w * px)},{int(h * px)}",
+                         f"--screenshot={out}", "file:///" + tmp.replace("\\", "/")], out)
+    finally:
+        os.remove(tmp)
     print(out)
 
 
@@ -648,7 +663,8 @@ def cmd_selftest(args):
                                capture_output=True, text=True, encoding="utf-8", errors="replace")
             ok = r.returncode == 0
             if ok and step[0] == "draw":   # чертёж считается готовым, только если PNG действительно появился
-                ok = any(os.path.getmtime(p) >= t - 1 for p in glob.glob(os.path.join(obj, "out", "drawing", "*_print.png")))
+                ok = any(os.path.getmtime(p) >= t - 1 and os.path.getsize(p) > 0
+                         for p in glob.glob(os.path.join(obj, "out", "drawing", "*_print.png")))
             last = (r.stdout.strip().splitlines() or [""])[-1]
             if step[0] == "posetest":
                 last = next((l for l in r.stdout.splitlines() if l.startswith("posetest")), last)

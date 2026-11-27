@@ -69,7 +69,7 @@ Builds the model, merges sheet settings (`bp3d.json` found upward from the folde
 | `--quick` | `<CODE>_print.svg`, `<CODE>_print.png` |
 | full | the above + `<CODE>.pdf` (print theme), `<CODE>_blueprint.svg`, `<CODE>_blueprint.png` |
 
-`<CODE>` is `model.code` up to the first space. The sheet size is `size` from the sheet dict, default A1 `(841, 594)` mm. PNG and PDF are printed by a headless browser; without a browser only SVG is written and the command still succeeds.
+`<CODE>` is `model.code` up to the first space. The sheet size is `size` from the sheet dict, default A1 `(841, 594)` mm. PNG and PDF are printed by a headless browser; without a browser only SVG is written and the command still succeeds. If the browser runs but leaves an empty PNG/PDF three times in a row, `draw` and `crop` fail.
 
 ## crop
 

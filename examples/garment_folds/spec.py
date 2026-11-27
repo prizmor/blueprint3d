@@ -28,9 +28,10 @@ def build_model():
     M.atlas_px = 4096                                  # мелкий рельеф в карте нормалей требует плотности текстуры
     O = Outfit(M, BODY, cols=48)
 
-    # майка: облегает тело, узкие лямки (shoulder_out внутрь), глубокая пройма; кромки — окантовкой
+    # майка: облегает тело, узкие лямки (shoulder_out внутрь), глубокая круглая пройма (armhole_round — низ дугой,
+    # глубина дуги вычтена из armhole_drop); кромки — окантовкой
     top = O.bodice(layer=1, bottom=("waist", 10), neck="round", neck_depth=75, neck_width=150, shoulder_out=-40,
-                   armhole_drop=40, ease=0.5, tent=0.6, name="tank")
+                   armhole_drop=18, armhole_round=0.6, ease=0.5, tent=0.6, name="tank")
     # вырез-капля на спине (cutout): ячейки внутри убраны, край — по эллипсу, вокруг квады; кромка — окантовкой
     zk = (LM["armpit"] + LM["waist"]) / 2 - 40
     O.cutout(top, BODY.closest(np.array([[BODY.center_x(zk) + 200.0, 0.0, zk]]))["point"][0], (64, 80), name="keyhole")
@@ -43,6 +44,7 @@ def build_model():
     shorts = O.pants(waist=("waist", -30), length=0.30, layer=2, ease={"waist": 0.5, ("waist", -60): 4, "hips": 4},
                      leg_ease={"top": 4, "thigh": 14}, leg_around={"front": 5, "back": 7, "out": 6}, leg_tent=0.6,
                      leg_smooth=1.5, t=1.4, cols=64, elastic=True, crease=8.0, name="shorts")
+    O.hang(shorts, side="back")             # сзади ткань идёт отвесно от ягодиц, а не заходит под них
     folds = O.auto_folds(shorts, amount=1.0, seams=True)          # присборка, натяжение от паха, «трубы», швы
     hem_L = shorts.edges["end_L"]
     folds += O.fold_crease(hem_L + np.array([0, 0, 18.0]), amp=1.6, width=5, mode=("normal", "mask"), name="hem_turn_L")
