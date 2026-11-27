@@ -84,6 +84,34 @@ HOOD_ROW_STEP = 26.0    # мм: шаг рядов капюшона (коротк
 LAST_SMOOTH = 14.0      # мм: сглаживание сечений колодки обуви вдоль стопы
 
 
+def _armhole_dip(Gt, nq, a, k):
+    """Низ проймы дугой: колонки трубы под проймами (вокруг колонок nq и 3·nq, ±a) начинаются ниже — на
+    эллипсе глубиной k × полуширина низа; колонка перепараметризуется по длине (доли рядов сохраняются, низ
+    трубы на месте)."""
+    G = Gt.copy()
+    nu = G.shape[0]
+    for c0 in (nq, 3 * nq):
+        cols = [(c0 - a + i) % nu for i in range(2 * a + 1)]
+        top = G[cols, 0]
+        half = np.linalg.norm(np.diff(top, axis=0), axis=1).sum() / 2
+        d = k * half
+        for i in range(1, 2 * a):
+            x = (i - a) / a
+            dip = d * math.sqrt(max(0.0, 1.0 - x * x))
+            col = G[cols[i]]
+            seg = np.linalg.norm(np.diff(col, axis=0), axis=1)
+            Ls = np.concatenate([[0.0], np.cumsum(seg)])
+            # длина по колонке до точки на dip мм ниже верха
+            z0 = col[0, 2] - dip
+            j = int(np.argmax(col[:, 2] <= z0)) if (col[:, 2] <= z0).any() else len(col) - 1
+            j = max(j, 1)
+            f = (col[j - 1, 2] - z0) / max(col[j - 1, 2] - col[j, 2], 1e-9)
+            s0 = Ls[j - 1] + (Ls[j] - Ls[j - 1]) * float(np.clip(f, 0.0, 1.0))
+            snew = s0 + (Ls[-1] - s0) * (Ls / Ls[-1])
+            G[cols[i]] = np.stack([np.interp(snew, Ls, col[:, q]) for q in range(3)], axis=1)
+    return G
+
+
 def _drape_grid(G, B, drape, taper):
     """Колонки сетки туловища (сверху вниз): расстояние от оси тела в плане не уменьшается быстрее taper мм на мм
     высоты — ткань висит от самого широкого места, а не облегает прогибы. drape — доля поправки (0…1)."""
@@ -283,13 +311,17 @@ class Outfit:
     # ------------------------------------------------------------ туловище: лиф с плечами
     def bodice(self, layer=1, bottom="waist", ease=0.0, tent=0.25, t=1.2, cols=None, row_step=None,
                neck="round", neck_depth=70.0, neck_width=None, back_depth=18.0, armhole_drop=14.0,
-               shoulder_out=0.0, open_front=False, smooth=1.0, name="bodice", drape=0.0, drape_taper=0.12):
+               shoulder_out=0.0, open_front=False, smooth=1.0, name="bodice", drape=0.0, drape_taper=0.12,
+               armhole_round=0.0):
         """Лиф, топ, рубашка, жакет, жилет: труба от подмышек до bottom плюс верх с плечами, проймами
         и вырезом. Кромки: bottom, neck, armhole_L, armhole_R (к ним стыкуются юбка, воротник, рукава).
 
         neck — "round" | "v" | "square" | "boat" | "high"; neck_depth — глубина выреза спереди от линии
         плеча, мм; neck_width — ширина выреза (по умолчанию от шеи); back_depth — глубина сзади.
         armhole_drop — насколько низ проймы ниже подмышки; shoulder_out — вынос плеча за сустав, мм.
+        armhole_round 0…1 — низ проймы дугой, а не прямой (майка, топ): середина низа опускается на
+        armhole_round × полуширину низа, к лямкам дуга встаёт отвесно — пройма круглая по всему контуру
+        (самая низкая точка — на armhole_drop + глубина дуги ниже подмышки).
         open_front=True — распашной перёд (жакет, жилет): полочки от выреза до низа, без середины.
         ease — прибавка свободы: {"waist": 2, "bust": 8} или число; полуприлегающий силуэт — ease и tent.
         drape 0…1 — висящая форма (худи, свитер, туника): ниже самого широкого места ткань идёт почти отвесно
@@ -307,9 +339,11 @@ class Outfit:
         Gt = B.push_out(Gt, np.array([[off(z) for z in zs]] * nu) - 0.3)
         if drape > 0:                                              # висящая форма: сверху вниз по колонкам
             Gt = _drape_grid(Gt, B, drape, drape_taper)
-        ring = Gt[:, 0]
         nq = nu // 4
         a = max(2, int(round(nu * 22.0 / 360)))                    # половина низа проймы, в петлях
+        if armhole_round > 0:
+            Gt = _armhole_dip(Gt, nq, a, armhole_round)
+        ring = Gt[:, 0]
         presets = dict(round=(1.0, 1.0), v=(1.0, 1.25), square=(1.15, 1.0), boat=(1.9, 0.35), high=(0.8, 0.3))
         kw, kd = presets[neck]
         yn = (neck_width / 2 if neck_width else (B.measures["neck"] / (2 * math.pi) + 14.0) * kw)
@@ -1908,6 +1942,94 @@ class Outfit:
         (люверс на накладке, заклёпка на ремне): ближайшая к точке сверху поверхность — верхняя."""
         h = self.surface_of(pieces).closest(np.asarray(P, float), k=8)
         return h["point"] + h["normal"] * clear
+
+    def hang(self, piece, side="back", soft=8.0, y_step=4.0, y_smooth=10.0, min_normal=0.5, patches=None, inner=40.0,
+             inner_ramp=60.0):
+        """Ткань свисает прямо вниз с самой выступающей точки фигуры, а не заходит под неё: шорты и брюки — с
+        ягодиц (side="back"), верх — с груди (side="front"). В каждом вертикальном срезе по Y поверхность вещи на
+        стороне side не уходит внутрь глубже, чем точка над ней: x не меньше накопленного сверху максимума
+        (side="front" — не больше минимума); ориентир — только точки выше узла. Двигаются узлы, смотрящие в
+        сторону side (нормаль · ось от min_normal − 0,15 до min_normal + 0,15 — мягкая граница); узлы ближе inner мм
+        к середине (|y| < inner, между ног) не двигаются, к inner + inner_ramp — в полную силу (None — везде).
+        Сход гладкий (soft мм), срез сглажен по Y (y_smooth мм). Кромки (edges) идут за узлами.
+        patches — имена лоскутов (по умолчанию все). Ниже точки схода ткань отходит от тела — вещь с hang
+        привязывать bind="loose". Возвращает piece."""
+        from scipy.ndimage import gaussian_filter1d
+        sgn = 1.0 if side == "back" else -1.0                    # перёд персонажа смотрит в −X
+        sel = [p for p in piece.patches if patches is None or p.name in patches]
+        pts, nrm = [], []
+        for p in sel:
+            G = p.G
+            du = np.gradient(G, axis=0) if not p.closed_u else (np.roll(G, -1, 0) - np.roll(G, 1, 0)) / 2
+            dv = np.gradient(G, axis=1)
+            n = np.cross(du, dv)
+            n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-9)
+            pts.append(G.reshape(-1, 3))
+            nrm.append(n.reshape(-1, 3))
+        P, N = np.vstack(pts), np.vstack(nrm)
+        nx = N[:, 0] * sgn
+        # общие узлы сваренных лоскутов — одна позиция, одна маска (иначе шов разойдётся)
+        _, inv = np.unique(np.round(P, 4), axis=0, return_inverse=True)
+        inv = inv.reshape(-1)
+        nmax = np.full(inv.max() + 1, -1.0)
+        np.maximum.at(nmax, inv, nx)
+        nx = nmax[inv]
+        on = nx >= min_normal
+        wmask = np.clip((nx - (min_normal - 0.15)) / 0.3, 0.0, 1.0)
+        wmask = wmask * wmask * (3 - 2 * wmask)                  # мягкая граница зоны
+        if inner is not None:                                    # между ног — без свеса
+            g = np.clip((np.abs(P[:, 1]) - inner) / max(inner_ramp, 1e-6), 0.0, 1.0)
+            wmask = wmask * g * g * (3 - 2 * g)
+            on = on & (np.abs(P[:, 1]) >= inner)
+        # накопленный сверху максимум «выступа» по срезам Y
+        y0 = float(P[:, 1].min()) - y_step
+        nb = int((P[:, 1].max() - y0) / y_step) + 2
+        zs = np.linspace(float(P[:, 2].max()), float(P[:, 2].min()), 160)
+        T = np.full((nb, len(zs)), -np.inf)
+        b_ = np.clip(((P[on, 1] - y0) / y_step).astype(int), 0, nb - 1)
+        k_ = np.clip(np.searchsorted(-zs, -P[on, 2]), 0, len(zs) - 1)
+        np.maximum.at(T, (b_, k_), P[on, 0] * sgn)
+        T = np.maximum.accumulate(T, axis=1)                     # сверху вниз — не глубже точки над ней
+        T = np.concatenate([np.full((nb, 2), -np.inf), T[:, :-2]], axis=1)   # только то, что выше узла
+        fin = np.isfinite(T)
+        T = np.where(fin, T, np.nan)
+        for j in range(T.shape[1]):                              # пустые срезы — по соседям
+            c = T[:, j]
+            ok = ~np.isnan(c)
+            if ok.any():
+                T[:, j] = np.interp(np.arange(nb), np.nonzero(ok)[0], c[ok])
+        T = np.nan_to_num(T, nan=-1e4)                           # над узлом ничего — без свеса
+        T = gaussian_filter1d(T, y_smooth / y_step, axis=0, mode="nearest")
+
+        def lift(Q, mask):
+            b = np.clip((Q[:, 1] - y0) / y_step, 0, nb - 1)
+            k = np.clip(np.interp(-Q[:, 2], -zs, np.arange(len(zs))), 0, len(zs) - 1)
+            b0, k0 = np.floor(b).astype(int), np.floor(k).astype(int)
+            b1, k1 = np.minimum(b0 + 1, nb - 1), np.minimum(k0 + 1, len(zs) - 1)
+            fb, fk = b - b0, k - k0
+            t = (T[b0, k0] * (1 - fb) * (1 - fk) + T[b1, k0] * fb * (1 - fk) + T[b0, k1] * (1 - fb) * fk
+                 + T[b1, k1] * fb * fk)
+            d = np.clip(t - Q[:, 0] * sgn, 0.0, None)
+            f = np.where(d >= soft, d, 2 * d ** 2 / soft - d ** 3 / soft ** 2)   # гладкий сход (C1)
+            out = Q.copy()
+            out[:, 0] += sgn * f * mask
+            return out
+
+        old = {}
+        i0 = 0
+        for p in sel:
+            n_ = p.G.shape[0] * p.G.shape[1]
+            Q = P[i0:i0 + n_]
+            new = lift(Q, wmask[i0:i0 + n_]).reshape(p.G.shape)
+            for a, b in zip(Q, new.reshape(-1, 3)):
+                old[tuple(np.round(a, 6))] = b
+            p.G = new
+            i0 += n_
+        for key, E in list(piece.edges.items()):                # кромки — за своими узлами
+            E = np.asarray(E, float)
+            if E.ndim == 2 and E.shape[1] == 3:
+                piece.edges[key] = np.array([old.get(tuple(np.round(q, 6)), q) for q in E])
+        return piece
 
     def surface_of(self, pieces):
         """Поверхность (body.Surface) наружных сеток и тел блоков pieces — для посадки накладных деталей."""

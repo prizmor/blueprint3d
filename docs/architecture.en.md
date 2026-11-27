@@ -128,7 +128,7 @@ Rules of the boundary:
 - A script prints its marker only after it has written everything; the Python side treats a missing marker, a non-zero exit code or a missing report as failure and shows the tail of `blender.log`.
 - Blender subprocesses have no timeout.
 
-The browser is a third external process: headless Edge/Chrome/Chromium prints the SVG to PNG (`--screenshot`) and PDF (`--print-to-pdf`). Its failures are not fatal — `draw` still writes SVG; `selftest --draw` detects a missing PNG.
+The browser is a third external process: headless Edge/Chrome/Chromium prints the SVG to PNG (`--screenshot`) and PDF (`--print-to-pdf`). Each run gets its own temporary profile (`--user-data-dir`), so parallel runs (two sheets at once, `selftest` next to `draw`) do not share one — a shared profile produced empty PNGs without an error. An empty or missing file is retried up to 3 times, then the command fails. Without a browser `draw` still writes SVG; `selftest --draw` treats a missing or empty PNG as a failure.
 
 ## Approval and reproducibility
 

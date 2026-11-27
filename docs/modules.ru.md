@@ -33,7 +33,7 @@
 - `spec_hash(obj)` — хеш апрува (см. [архитектуру](architecture.ru.md#апрув-и-воспроизводимость)). `spec_bodies(obj)` находит глобальные `Body` спецификации; спецификация запускается, только если в её тексте упоминается `bp3d.body` или `from bp3d import`.
 - `project_config(obj)` — первый `bp3d.json` вверх от папки объекта.
 - `check_quad`, `check_garment` — правила `check`; пороги `ASPECT_MAX = 8.0`, `BREP_DEV_MAX = 1.5` мм.
-- `browser()`, `render_svg()` — поиск браузера без интерфейса и SVG → PNG/PDF.
+- `browser()`, `render_svg()`, `_browser_run()` — поиск браузера без интерфейса и SVG → PNG/PDF (свой временный профиль на каждый запуск, повтор при пустом файле).
 - `_run_pose()`, `_garment_blend()` — связка с `bl_pose.py`.
 - `cmd_selftest` — запускает каждый шаг образца в отдельном процессе с `PYTHONPATH` = корень репозитория.
 
@@ -140,7 +140,7 @@
 - Константы: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` мм, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, пресеты `DYNAMICS = {stiff, soft, rigid}` (жёсткость, затухание, гравитация, радиус).
 - `Piece(patches, t, edges, solid, joints, name)` — сетки внешней поверхности с именованными краями, к которым крепятся другие блоки; суставы — для проверки петель у суставов.
 - `Outfit(model, body, cols=48)` — выставляет `model.body`, добавляет тело как деталь `phantom`; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` сваривает куски в одну квадовую деталь с толщиной и заполняет `info` (зазор, суставы, области, подкладка).
-- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`, `panel_at`, `hood`, `drawstring`, `kangaroo_pocket`, `cargo_pocket`, `cutout`; помощники `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
+- Блоки: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`, `panel_at`, `hood`, `drawstring`, `kangaroo_pocket`, `cargo_pocket`, `cutout`, `hang`; помощники `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Параметры и края: руководство → Одежда.
 
 ## `rig.py`
 

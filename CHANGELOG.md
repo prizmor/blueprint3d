@@ -6,6 +6,16 @@ Every pull request that changes the tool adds a line under **Unreleased** (CI ch
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-27
+
+### Added
+- `Outfit.hang(piece, side)`: fabric hangs straight down from the most prominent point (shorts and trousers from the buttocks, a top from the bust) instead of following under it; the zone between the legs stays, welded rows move together, edges follow. **[hash]**
+- `bodice(armhole_round=0…1)`: the armhole bottom as an arc turning vertical at the straps — a round armhole for tank and crop tops (default 0, unchanged). **[hash]**
+- Sample `garment_folds`: the tank uses `armhole_round`, the shorts hang straight from the seat (`hang`).
+
+### Fixed
+- `draw` and `crop` run the browser with its own temporary profile and retry an empty file: two drawings at once (or `selftest` next to `draw`) left empty PNGs without an error; `selftest --draw` now also fails on an empty PNG.
+
 ## [0.6.0] - 2026-11-27
 
 ### Added

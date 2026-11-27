@@ -33,7 +33,7 @@ What each module in `bp3d/` is responsible for, its public interface, what it de
 - `spec_hash(obj)` — approval hash (see [architecture](architecture.en.md#approval-and-reproducibility)). `spec_bodies(obj)` finds `Body` globals of the spec; it runs the spec only if its text mentions `bp3d.body` or `from bp3d import`.
 - `project_config(obj)` — first `bp3d.json` upward from the object folder.
 - `check_quad`, `check_garment` — the rules of `check`; thresholds `ASPECT_MAX = 8.0`, `BREP_DEV_MAX = 1.5` mm.
-- `browser()`, `render_svg()` — headless browser lookup and SVG → PNG/PDF.
+- `browser()`, `render_svg()`, `_browser_run()` — headless browser lookup and SVG → PNG/PDF (own temporary profile per run, retry on an empty file).
 - `_run_pose()`, `_garment_blend()` — glue to `bl_pose.py`.
 - `cmd_selftest` — runs each sample step in a separate process with `PYTHONPATH` = repo root.
 
@@ -140,7 +140,7 @@ Watch out: `ViewProj.MODE`/`DEFLECTION` are class-level and set by every `build_
 - Constants: `LAYER_GAP = {1: 2, 2: 6, 3: 10, 4: 14}` mm, `ROW_STEP = 20`, `MIN_JOINT_LOOPS = 3`, `DYNAMICS = {stiff, soft, rigid}` presets (stiffness, damping, gravity, radius).
 - `Piece(patches, t, edges, solid, joints, name)` — outer-surface grids with named edges other blocks attach to; joints for the joint-loop check.
 - `Outfit(model, body, cols=48)` — sets `model.body`, adds the body as a `phantom` part; `add(key, pos, name, material, pieces, finish="cloth", layer, bind="auto", dynamics, hides, pattern, …)` welds pieces into one quad part with thickness and fills `info` (gap, joints, regions, lining).
-- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`, `panel_at`, `hood`, `drawstring`, `kangaroo_pocket`, `cargo_pocket`, `cutout`; helpers `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
+- Blocks: `tube`, `bodice`, `sleeve`, `skirt`, `pants`, `stocking`, `glove`, `collar`, `cuff`, `hem_band`, `band`, `piping`, `belt`, `buckle`, `button(s)`, `lacing`, `ribbon`, `bow`, `shoe`, `shoe_bind`, `shoe_overlays`, `shoe_tread`, `sneaker_details`, `panel`, `panel_at`, `hood`, `drawstring`, `kangaroo_pocket`, `cargo_pocket`, `cutout`, `hang`; helpers `waist_ring`, `push_over`, `drop_on`, `surface_of`, `over_radius`, `front_point`. Parameters and edges: manual → Clothing.
 
 ## `rig.py`
 
